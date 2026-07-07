@@ -40,7 +40,7 @@ export default async function Home() {
           <Link href="/sessions" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
             📅 <div className="mt-2 font-bold">Sessions</div>
           </Link>
-          <Link href={latest ? `/sessions/${latest.id}` : "/sessions"} className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
+          <Link href="/payments" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
             💰 <div className="mt-2 font-bold">Payments</div>
           </Link>
           <Link href={latest ? `/sessions/${latest.id}` : "/sessions"} className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
