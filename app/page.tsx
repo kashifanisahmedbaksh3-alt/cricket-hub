@@ -49,6 +49,12 @@ export default async function Home() {
           <Link href="/videos" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
   📹          <div className="mt-2 font-bold">Videos</div>
           </Link>
+          <Link href="/statistics" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
+  📊 <div className="mt-2 font-bold">Statistics</div>
+      </Link>
+      <Link href="/captains" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
+  👑 <div className="mt-2 font-bold">Captains</div>
+</Link>
               </div>
 
         {latest ? (
