@@ -6,11 +6,18 @@ import { supabase } from "../../../lib/supabase";
 
 type SessionPlayer = {
   id: string;
+  player_id: string;
   amount_paid: number;
   payment_method: string | null;
   players: {
     name: string;
   };
+};
+
+type Player = {
+  id: string;
+  name: string;
+  is_active: boolean;
 };
 
 type Match = {
@@ -43,6 +50,8 @@ export default function SessionDetailPage() {
   const id = params.id as string;
 
   const [session, setSession] = useState<any>(null);
+  const [allPlayers, setAllPlayers] = useState<Player[]>([]);
+  const [selectedNewPlayerId, setSelectedNewPlayerId] = useState("");
   const [loading, setLoading] = useState(true);
   const [savingMatch, setSavingMatch] = useState(false);
   const [openMatchId, setOpenMatchId] = useState<string | null>(null);
@@ -85,6 +94,13 @@ export default function SessionDetailPage() {
       setSession(data);
     }
 
+    const { data: playerData } = await supabase
+      .from("players")
+      .select("id,name,is_active")
+      .eq("is_active", true)
+      .order("name");
+
+    setAllPlayers(playerData || []);
     setLoading(false);
   }
 
@@ -137,6 +153,54 @@ export default function SessionDetailPage() {
       gpay,
     };
   }, [session]);
+
+  async function addPlayerToSession() {
+    if (!selectedNewPlayerId) {
+      alert("Please select a player");
+      return;
+    }
+
+    const alreadyAdded = session.session_players?.some(
+      (row: SessionPlayer) => row.player_id === selectedNewPlayerId
+    );
+
+    if (alreadyAdded) {
+      alert("Player already added to this session");
+      return;
+    }
+
+    const { error } = await supabase.from("session_players").insert({
+      session_id: id,
+      player_id: selectedNewPlayerId,
+      amount_paid: 0,
+      payment_method: null,
+    });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    setSelectedNewPlayerId("");
+    loadSession();
+  }
+
+  async function removePlayerFromSession(sessionPlayerId: string) {
+    const confirmRemove = confirm("Remove this player from this session?");
+    if (!confirmRemove) return;
+
+    const { error } = await supabase
+      .from("session_players")
+      .delete()
+      .eq("id", sessionPlayerId);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    loadSession();
+  }
 
   async function markPayment(
     sessionPlayerId: string,
@@ -245,6 +309,13 @@ export default function SessionDetailPage() {
     (a: Match, b: Match) => a.match_number - b.match_number
   );
 
+  const availablePlayers = allPlayers.filter(
+    (player) =>
+      !session.session_players?.some(
+        (row: SessionPlayer) => row.player_id === player.id
+      )
+  );
+
   return (
     <main className="min-h-screen bg-slate-950 p-6 text-white">
       <div className="mx-auto max-w-6xl">
@@ -268,6 +339,52 @@ export default function SessionDetailPage() {
           <Card label="Collected" value={`₹${summary.collected.toFixed(2)}`} />
           <Card label="Cash" value={`₹${summary.cash.toFixed(2)}`} />
           <Card label="GPay" value={`₹${summary.gpay.toFixed(2)}`} />
+        </section>
+
+        <section className="mt-8 rounded-2xl bg-slate-900 p-6">
+          <h2 className="text-2xl font-semibold">👥 Manage Session Players</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Add late joiners or remove players who cancelled. The share amount recalculates automatically.
+          </p>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <select
+              value={selectedNewPlayerId}
+              onChange={(e) => setSelectedNewPlayerId(e.target.value)}
+              className="rounded-xl border border-slate-700 bg-slate-800 p-3"
+            >
+              <option value="">Select player to add</option>
+              {availablePlayers.map((player) => (
+                <option key={player.id} value={player.id}>
+                  {player.name}
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={addPlayerToSession}
+              className="rounded-xl bg-green-500 px-5 py-3 font-semibold text-slate-950"
+            >
+              Add Player to Session
+            </button>
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {session.session_players?.map((row: SessionPlayer) => (
+              <div
+                key={row.id}
+                className="flex items-center justify-between gap-3 rounded-xl border border-slate-700 bg-slate-800 p-3"
+              >
+                <span>{row.players?.name}</span>
+                <button
+                  onClick={() => removePlayerFromSession(row.id)}
+                  className="rounded-lg border border-red-400 px-3 py-1 text-xs text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
         </section>
 
         <section className="mt-8 rounded-2xl bg-slate-900 p-6">
@@ -353,7 +470,7 @@ export default function SessionDetailPage() {
         </section>
 
         <section id="matches" className="mt-8 rounded-2xl bg-slate-900 p-6">
-        <h2 className="text-2xl font-semibold">🏏 Match Centre</h2>
+          <h2 className="text-2xl font-semibold">🏏 Match Centre</h2>
           <p className="mt-1 text-sm text-slate-400">
             Add match scores, winner, player of the match and YouTube link.
           </p>
@@ -400,102 +517,103 @@ export default function SessionDetailPage() {
           >
             {savingMatch ? "Saving..." : "Add Match"}
           </button>
+
           <div className="mt-8 space-y-4">
-  {matches.length === 0 && (
-    <p className="text-slate-400">No matches added yet.</p>
-  )}
-
-  {matches.map((match: Match) => {
-    const isOpen = openMatchId === match.id;
-
-    return (
-      <div
-        key={match.id}
-        className="rounded-2xl border border-slate-700 bg-slate-800 p-5"
-      >
-        <div
-          className="flex cursor-pointer items-center justify-between gap-4"
-          onClick={() => setOpenMatchId(isOpen ? null : match.id)}
-        >
-          <div>
-            <h3 className="text-xl font-bold">
-              {isOpen ? "▼" : "▶"} Match {match.match_number}
-            </h3>
-            <p className="mt-1 text-sm text-slate-400">
-              {match.team_a || "Team A"} vs {match.team_b || "Team B"}
-            </p>
-          </div>
-
-          <div className="text-right">
-            <p className="text-lg font-bold">
-              {match.team_a_runs ?? 0}/{match.team_a_wickets ?? 0} vs{" "}
-              {match.team_b_runs ?? 0}/{match.team_b_wickets ?? 0}
-            </p>
-            <p className="text-sm text-green-300">
-              🏆 {match.winner || "Winner not added"}
-            </p>
-          </div>
-        </div>
-
-        {isOpen && (
-          <div className="mt-5 border-t border-slate-700 pt-5">
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="rounded-xl bg-slate-900 p-4">
-                <p className="text-sm text-slate-400">Team A</p>
-                <p className="mt-1 font-bold">{match.team_a || "-"}</p>
-                <p className="mt-2 text-3xl font-bold">
-                  {match.team_a_runs ?? 0}/{match.team_a_wickets ?? 0}
-                </p>
-              </div>
-
-              <div className="rounded-xl bg-slate-900 p-4">
-                <p className="text-sm text-slate-400">Team B</p>
-                <p className="mt-1 font-bold">{match.team_b || "-"}</p>
-                <p className="mt-2 text-3xl font-bold">
-                  {match.team_b_runs ?? 0}/{match.team_b_wickets ?? 0}
-                </p>
-              </div>
-            </div>
-
-            <p className="mt-4 font-semibold text-green-300">
-              🏆 Winner: {match.winner || "-"}
-            </p>
-
-            {match.player_of_match && (
-              <p className="mt-2 text-yellow-300">
-                ⭐ Player of Match: {match.player_of_match}
-              </p>
+            {matches.length === 0 && (
+              <p className="text-slate-400">No matches added yet.</p>
             )}
 
-            {match.youtube_video_id && (
-              <div className="mt-4 overflow-hidden rounded-xl border border-slate-700">
-                <iframe
-                  className="aspect-video w-full"
-                  src={`https://www.youtube.com/embed/${match.youtube_video_id}`}
-                  title={`Match ${match.match_number} video`}
-                  allowFullScreen
-                />
-              </div>
-            )}
+            {matches.map((match: Match) => {
+              const isOpen = openMatchId === match.id;
 
-            {match.match_notes && (
-              <p className="mt-4 text-sm text-slate-300">
-                {match.match_notes}
-              </p>
-            )}
+              return (
+                <div
+                  key={match.id}
+                  className="rounded-2xl border border-slate-700 bg-slate-800 p-5"
+                >
+                  <div
+                    className="flex cursor-pointer items-center justify-between gap-4"
+                    onClick={() => setOpenMatchId(isOpen ? null : match.id)}
+                  >
+                    <div>
+                      <h3 className="text-xl font-bold">
+                        {isOpen ? "▼" : "▶"} Match {match.match_number}
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-400">
+                        {match.team_a || "Team A"} vs {match.team_b || "Team B"}
+                      </p>
+                    </div>
 
-            <button
-              onClick={() => deleteMatch(match.id)}
-              className="mt-4 rounded-lg border border-red-400 px-3 py-1 text-xs text-red-300"
-            >
-              Delete Match
-            </button>
+                    <div className="text-right">
+                      <p className="text-lg font-bold">
+                        {match.team_a_runs ?? 0}/{match.team_a_wickets ?? 0} vs{" "}
+                        {match.team_b_runs ?? 0}/{match.team_b_wickets ?? 0}
+                      </p>
+                      <p className="text-sm text-green-300">
+                        🏆 {match.winner || "Winner not added"}
+                      </p>
+                    </div>
+                  </div>
+
+                  {isOpen && (
+                    <div className="mt-5 border-t border-slate-700 pt-5">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="rounded-xl bg-slate-900 p-4">
+                          <p className="text-sm text-slate-400">Team A</p>
+                          <p className="mt-1 font-bold">{match.team_a || "-"}</p>
+                          <p className="mt-2 text-3xl font-bold">
+                            {match.team_a_runs ?? 0}/{match.team_a_wickets ?? 0}
+                          </p>
+                        </div>
+
+                        <div className="rounded-xl bg-slate-900 p-4">
+                          <p className="text-sm text-slate-400">Team B</p>
+                          <p className="mt-1 font-bold">{match.team_b || "-"}</p>
+                          <p className="mt-2 text-3xl font-bold">
+                            {match.team_b_runs ?? 0}/{match.team_b_wickets ?? 0}
+                          </p>
+                        </div>
+                      </div>
+
+                      <p className="mt-4 font-semibold text-green-300">
+                        🏆 Winner: {match.winner || "-"}
+                      </p>
+
+                      {match.player_of_match && (
+                        <p className="mt-2 text-yellow-300">
+                          ⭐ Player of Match: {match.player_of_match}
+                        </p>
+                      )}
+
+                      {match.youtube_video_id && (
+                        <div className="mt-4 overflow-hidden rounded-xl border border-slate-700">
+                          <iframe
+                            className="aspect-video w-full"
+                            src={`https://www.youtube.com/embed/${match.youtube_video_id}`}
+                            title={`Match ${match.match_number} video`}
+                            allowFullScreen
+                          />
+                        </div>
+                      )}
+
+                      {match.match_notes && (
+                        <p className="mt-4 text-sm text-slate-300">
+                          {match.match_notes}
+                        </p>
+                      )}
+
+                      <button
+                        onClick={() => deleteMatch(match.id)}
+                        className="mt-4 rounded-lg border border-red-400 px-3 py-1 text-xs text-red-300"
+                      >
+                        Delete Match
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        )}
-      </div>
-    );
-  })}
-</div>    
         </section>
       </div>
     </main>
