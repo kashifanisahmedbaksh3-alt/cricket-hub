@@ -4,6 +4,7 @@ import { getCurrentUser } from "../lib/auth";
 
 export default async function Home() {
   const user = await getCurrentUser();
+
   const { data: sessions } = await supabase
     .from("sessions")
     .select(`
@@ -12,20 +13,42 @@ export default async function Home() {
       session_players (*),
       matches (*)
     `)
-    .order("session_date", { ascending: false })
-    .limit(5);
+    .order("session_date", { ascending: true });
 
-  const latest = sessions?.[0];
+  const allSessions = sessions || [];
+  const today = new Date().toISOString().slice(0, 10);
 
-  const playerCount = latest?.session_players?.length || 0;
-  const booking = Number(latest?.booking_amount || 0);
+  const upcomingSessions = allSessions.filter(
+    (session: any) => session.session_date >= today
+  );
+
+  const pastSessions = allSessions.filter(
+    (session: any) => session.session_date < today
+  );
+
+  const mainSession =
+    upcomingSessions[0] ||
+    [...pastSessions].sort((a: any, b: any) =>
+      b.session_date.localeCompare(a.session_date)
+    )[0];
+
+  const isUpcoming = mainSession?.session_date >= today;
+
+  const playerCount = mainSession?.session_players?.length || 0;
+  const booking = Number(mainSession?.booking_amount || 0);
+
   const collected =
-    latest?.session_players?.reduce(
+    mainSession?.session_players?.reduce(
       (sum: number, p: any) => sum + Number(p.amount_paid || 0),
       0
     ) || 0;
+
   const pending = booking - collected;
   const perPlayer = playerCount > 0 ? booking / playerCount : 0;
+
+  const recentSessions = [...allSessions].sort((a: any, b: any) =>
+    b.session_date.localeCompare(a.session_date)
+  ).slice(0, 5);
 
   return (
     <main className="min-h-screen bg-slate-950 p-6 text-white">
@@ -34,58 +57,71 @@ export default async function Home() {
         <p className="mt-2 text-slate-300">
           Your Sunday cricket control center.
         </p>
+
         <div className="mt-4 rounded-2xl bg-slate-900 p-4">
-        {user ? (
-         <p className="text-green-300">👑 Admin logged in: {user.email}</p>
-           ) : (
-         <Link href="/login" className="text-slate-300 underline">
-          Admin login
-          </Link>
-         )}
+          {user ? (
+            <p className="text-green-300">👑 Admin logged in: {user.email}</p>
+          ) : (
+            <Link href="/login" className="text-slate-300 underline">
+              Admin login
+            </Link>
+          )}
         </div>
+
         <div className="mt-8 grid gap-4 md:grid-cols-5">
           <Link href="/players" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
             👥 <div className="mt-2 font-bold">Players</div>
           </Link>
+
           <Link href="/sessions" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
             📅 <div className="mt-2 font-bold">Sessions</div>
           </Link>
+
           <Link href="/payments" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
             💰 <div className="mt-2 font-bold">Payments</div>
           </Link>
-          <Link href={latest ? `/sessions/${latest.id}` : "/sessions"} className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
+
+          <Link href={mainSession ? `/sessions/${mainSession.id}` : "/sessions"} className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
             🏏 <div className="mt-2 font-bold">Matches</div>
           </Link>
-          <Link href="/videos" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
-  📹          <div className="mt-2 font-bold">Videos</div>
-          </Link>
-          <Link href="/statistics" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
-  📊 <div className="mt-2 font-bold">Statistics</div>
-      </Link>
-      <Link href="/captains" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
-  👑 <div className="mt-2 font-bold">Captains</div>
-</Link>
-              </div>
 
-        {latest ? (
+          <Link href="/videos" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
+            📹 <div className="mt-2 font-bold">Videos</div>
+          </Link>
+
+          <Link href="/statistics" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
+            📊 <div className="mt-2 font-bold">Statistics</div>
+          </Link>
+
+          <Link href="/captains" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
+            👑 <div className="mt-2 font-bold">Captains</div>
+          </Link>
+        </div>
+
+        {mainSession ? (
           <section className="mt-8 rounded-3xl bg-slate-900 p-6">
             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
               <div>
-                <p className="text-sm text-slate-400">Latest Session</p>
-                <h2 className="mt-2 text-3xl font-bold">
-                  {latest.session_name}
-                </h2>
-                <p className="mt-2 text-slate-300">
-                  📅 {latest.session_date} • 📍 {latest.turfs?.name}
+                <p className="text-sm text-slate-400">
+                  {isUpcoming ? "Upcoming Session" : "Latest Session"}
                 </p>
+
+                <h2 className="mt-2 text-3xl font-bold">
+                  {mainSession.session_name}
+                </h2>
+
+                <p className="mt-2 text-slate-300">
+                  📅 {mainSession.session_date} • 📍 {mainSession.turfs?.name}
+                </p>
+
                 <p className="mt-1 text-slate-400">
-                  {latest.booking_type === "night" ? "🌙 Night" : "☀️ Day"} •{" "}
-                  {latest.hours_booked} hours • {latest.overs_per_match} overs
+                  {mainSession.booking_type === "night" ? "🌙 Night" : "☀️ Day"} •{" "}
+                  {mainSession.hours_booked} hours • {mainSession.overs_per_match} overs
                 </p>
               </div>
 
               <Link
-                href={`/sessions/${latest.id}`}
+                href={`/sessions/${mainSession.id}`}
                 className="rounded-xl bg-green-500 px-5 py-3 font-semibold text-slate-950"
               >
                 Open Session
@@ -101,9 +137,9 @@ export default async function Home() {
             </div>
 
             <div className="mt-6 grid gap-4 md:grid-cols-3">
-              <MiniCard label="Captain / Team A" value={latest.captain_a || "-"} />
-              <MiniCard label="Captain / Team B" value={latest.captain_b || "-"} />
-              <MiniCard label="Matches Added" value={String(latest.matches?.length || 0)} />
+              <MiniCard label="Captain / Team A" value={mainSession.captain_a || "-"} />
+              <MiniCard label="Captain / Team B" value={mainSession.captain_b || "-"} />
+              <MiniCard label="Matches Added" value={String(mainSession.matches?.length || 0)} />
             </div>
           </section>
         ) : (
@@ -112,6 +148,7 @@ export default async function Home() {
             <p className="mt-2 text-slate-400">
               Create your first Sunday cricket session.
             </p>
+
             <Link
               href="/sessions"
               className="mt-5 inline-block rounded-xl bg-green-500 px-5 py-3 font-semibold text-slate-950"
@@ -125,7 +162,7 @@ export default async function Home() {
           <h2 className="text-2xl font-bold">Recent Sessions</h2>
 
           <div className="mt-4 space-y-3">
-            {sessions?.map((session: any) => (
+            {recentSessions.map((session: any) => (
               <Link
                 key={session.id}
                 href={`/sessions/${session.id}`}
@@ -138,6 +175,7 @@ export default async function Home() {
                       {session.session_date} • {session.turfs?.name}
                     </p>
                   </div>
+
                   <div className="text-sm text-slate-300">
                     👥 {session.session_players?.length || 0} players • 🏏{" "}
                     {session.matches?.length || 0} matches
