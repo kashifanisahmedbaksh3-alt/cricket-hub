@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { supabase } from "../lib/supabase";
+import { getCurrentUser } from "../lib/auth";
 
 export default async function Home() {
+  const user = await getCurrentUser();
   const { data: sessions } = await supabase
     .from("sessions")
     .select(`
@@ -32,7 +34,15 @@ export default async function Home() {
         <p className="mt-2 text-slate-300">
           Your Sunday cricket control center.
         </p>
-
+        <div className="mt-4 rounded-2xl bg-slate-900 p-4">
+        {user ? (
+         <p className="text-green-300">👑 Admin logged in: {user.email}</p>
+           ) : (
+         <Link href="/login" className="text-slate-300 underline">
+          Admin login
+          </Link>
+         )}
+        </div>
         <div className="mt-8 grid gap-4 md:grid-cols-5">
           <Link href="/players" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
             👥 <div className="mt-2 font-bold">Players</div>
