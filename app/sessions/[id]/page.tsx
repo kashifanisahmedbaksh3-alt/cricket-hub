@@ -37,6 +37,12 @@ type Match = {
   match_notes: string | null;
 };
 
+type EditMatchForm = {
+  youtube_url: string;
+  player_of_match: string;
+  match_notes: string;
+};
+
 function getYouTubeId(url: string) {
   if (!url) return "";
   const regex =
@@ -55,6 +61,14 @@ export default function SessionDetailPage() {
   const [loading, setLoading] = useState(true);
   const [savingMatch, setSavingMatch] = useState(false);
   const [openMatchId, setOpenMatchId] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
+  const [savingMatchDetails, setSavingMatchDetails] = useState(false);
+  const [editMatchForm, setEditMatchForm] = useState<EditMatchForm>({
+    youtube_url: "",
+    player_of_match: "",
+    match_notes: "",
+  });
 
   const [matchForm, setMatchForm] = useState({
     match_number: "",
@@ -70,6 +84,17 @@ export default function SessionDetailPage() {
     youtube_url: "",
     match_notes: "",
   });
+
+  async function loadAdminStatus() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    setIsAdmin(
+      user?.email?.toLowerCase() ===
+        "kashifanisahmedbaksh3@gmail.com"
+    );
+  }
 
   async function loadSession() {
     setLoading(true);
@@ -105,6 +130,7 @@ export default function SessionDetailPage() {
   }
 
   useEffect(() => {
+    loadAdminStatus();
     loadSession();
   }, [id]);
 
@@ -273,6 +299,56 @@ export default function SessionDetailPage() {
     });
 
     loadSession();
+  }
+
+  function startEditingMatch(match: Match) {
+    setEditingMatchId(match.id);
+    setEditMatchForm({
+      youtube_url: match.youtube_url || "",
+      player_of_match: match.player_of_match || "",
+      match_notes: match.match_notes || "",
+    });
+  }
+
+  function cancelEditingMatch() {
+    setEditingMatchId(null);
+    setEditMatchForm({
+      youtube_url: "",
+      player_of_match: "",
+      match_notes: "",
+    });
+  }
+
+  async function saveMatchDetails(matchId: string) {
+    if (!isAdmin) {
+      alert("Please log in as admin to edit match details.");
+      return;
+    }
+
+    setSavingMatchDetails(true);
+
+    const youtubeVideoId = getYouTubeId(editMatchForm.youtube_url);
+
+    const { error } = await supabase
+      .from("matches")
+      .update({
+        youtube_url: editMatchForm.youtube_url.trim() || null,
+        youtube_video_id: youtubeVideoId || null,
+        player_of_match: editMatchForm.player_of_match.trim() || null,
+        match_notes: editMatchForm.match_notes.trim() || null,
+      })
+      .eq("id", matchId);
+
+    setSavingMatchDetails(false);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    cancelEditingMatch();
+    await loadSession();
+    alert("Match details updated successfully.");
   }
 
   async function deleteMatch(matchId: string) {
@@ -602,12 +678,91 @@ export default function SessionDetailPage() {
                         </p>
                       )}
 
-                      <button
-                        onClick={() => deleteMatch(match.id)}
-                        className="mt-4 rounded-lg border border-red-400 px-3 py-1 text-xs text-red-300"
-                      >
-                        Delete Match
-                      </button>
+                      {isAdmin && editingMatchId === match.id && (
+                        <div className="mt-6 rounded-2xl border border-slate-600 bg-slate-900 p-5">
+                          <h4 className="text-lg font-bold">Edit Match Details</h4>
+                          <p className="mt-1 text-sm text-slate-400">
+                            This updates only the video, player of the match and notes. The AI-generated score and winner remain unchanged.
+                          </p>
+
+                          <div className="mt-4 space-y-4">
+                            <Input
+                              label="YouTube URL"
+                              value={editMatchForm.youtube_url}
+                              onChange={(value) =>
+                                setEditMatchForm({
+                                  ...editMatchForm,
+                                  youtube_url: value,
+                                })
+                              }
+                            />
+
+                            <Input
+                              label="Player of Match"
+                              value={editMatchForm.player_of_match}
+                              onChange={(value) =>
+                                setEditMatchForm({
+                                  ...editMatchForm,
+                                  player_of_match: value,
+                                })
+                              }
+                            />
+
+                            <div>
+                              <label className="mb-2 block text-sm text-slate-300">
+                                Match Notes
+                              </label>
+                              <textarea
+                                className="min-h-28 w-full rounded-xl border border-slate-700 bg-slate-800 p-3"
+                                value={editMatchForm.match_notes}
+                                onChange={(event) =>
+                                  setEditMatchForm({
+                                    ...editMatchForm,
+                                    match_notes: event.target.value,
+                                  })
+                                }
+                                placeholder="Add match summary, highlights or notes..."
+                              />
+                            </div>
+                          </div>
+
+                          <div className="mt-4 flex flex-wrap gap-3">
+                            <button
+                              onClick={() => saveMatchDetails(match.id)}
+                              disabled={savingMatchDetails}
+                              className="rounded-xl bg-green-500 px-5 py-2 font-semibold text-slate-950 disabled:opacity-50"
+                            >
+                              {savingMatchDetails ? "Saving..." : "Save Changes"}
+                            </button>
+
+                            <button
+                              onClick={cancelEditingMatch}
+                              disabled={savingMatchDetails}
+                              className="rounded-xl border border-slate-500 px-5 py-2 text-slate-300 disabled:opacity-50"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {isAdmin && editingMatchId !== match.id && (
+                        <div className="mt-5 flex flex-wrap gap-3">
+                          <button
+                            onClick={() => startEditingMatch(match)}
+                            className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white"
+                          >
+                            Edit Match Details
+                          </button>
+
+                          <button
+                            onClick={() => deleteMatch(match.id)}
+                            className="rounded-lg border border-red-400 px-4 py-2 text-sm text-red-300"
+                          >
+                            Delete Match
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
