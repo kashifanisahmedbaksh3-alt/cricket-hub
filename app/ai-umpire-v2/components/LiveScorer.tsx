@@ -572,12 +572,30 @@ export default function LiveScorer({
     await loadBallEvents(match.id, inningsNumber);
     await refreshPlayerStats();
 
+    const inningsBallLimit = Number(match.overs || 0) * 6;
+
+    const inningsOversCompleted =
+      inningsBallLimit > 0 &&
+      legalBallCountAfter >= inningsBallLimit;
+
     if (
       inningsNumber === 2 &&
       match.target_runs &&
       inningsRunsAfter >= Number(match.target_runs)
     ) {
-      await finishMatch(true);
+      await finishMatch(true, "target");
+      setSaving(false);
+      return;
+    }
+
+    if (inningsNumber === 1 && inningsOversCompleted) {
+      await autoStartSecondInnings();
+      setSaving(false);
+      return;
+    }
+
+    if (inningsNumber === 2 && inningsOversCompleted) {
+      await finishMatch(true, "overs");
       setSaving(false);
       return;
     }
@@ -717,6 +735,83 @@ export default function LiveScorer({
     await refreshPlayerStats();
   }
 
+  async function autoStartSecondInnings() {
+    if (!battingFirstSide) return;
+
+    const { data, error: eventError } = await supabase
+      .from("ball_events")
+      .select("*")
+      .eq("match_id", match.id)
+      .eq("innings_number", 1)
+      .order("event_number", { ascending: true });
+
+    if (eventError) {
+      alert(eventError.message);
+      return;
+    }
+
+    const finalFirstInningsScore = calculateInningsScore(
+      (data || []) as BallEvent[]
+    );
+
+    const target = finalFirstInningsScore.runs + 1;
+    const firstSideIsA = battingFirstSide === "A";
+
+    const { error } = await supabase
+      .from("matches")
+      .update({
+        current_innings: 2,
+        target_runs: target,
+        match_status: "live",
+        batting_first_team: firstSideIsA
+          ? teamAName
+          : teamBName,
+        team_a_runs: firstSideIsA
+          ? finalFirstInningsScore.runs
+          : Number(match.team_a_runs || 0),
+        team_a_wickets: firstSideIsA
+          ? finalFirstInningsScore.wickets
+          : Number(match.team_a_wickets || 0),
+        team_b_runs: firstSideIsA
+          ? Number(match.team_b_runs || 0)
+          : finalFirstInningsScore.runs,
+        team_b_wickets: firstSideIsA
+          ? Number(match.team_b_wickets || 0)
+          : finalFirstInningsScore.wickets,
+        striker_id: null,
+        non_striker_id: null,
+        bowler_id: null,
+      })
+      .eq("id", match.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    const firstTeamName =
+      battingFirstSide === "A" ? teamAName : teamBName;
+
+    setInningsNumber(2);
+    setEvents([]);
+    setStrikerId("");
+    setNonStrikerId("");
+    setBowlerId("");
+    setFielderId("");
+
+    alert(
+      `🏏 First innings completed automatically!\n\n` +
+        `${firstTeamName}: ` +
+        `${finalFirstInningsScore.runs}/` +
+        `${finalFirstInningsScore.wickets}\n\n` +
+        `Target: ${target}`
+    );
+
+    await refreshPlayerStats();
+    await onMatchUpdated?.();
+    await loadBallEvents(match.id, 2);
+  }
+
   async function startSecondInnings() {
     if (
       !isAdmin ||
@@ -774,7 +869,10 @@ export default function LiveScorer({
     await onMatchUpdated?.();
   }
 
-  async function finishMatch(automatic = false) {
+  async function finishMatch(
+    automatic = false,
+    automaticReason: "target" | "overs" = "target"
+  ) {
     if (!isAdmin || inningsNumber !== 2 || !battingFirstSide) return;
 
     if (
@@ -868,7 +966,9 @@ export default function LiveScorer({
     alert(
       `${
         automatic
-          ? "🏆 Target reached — match completed automatically!"
+          ? automaticReason === "target"
+            ? "🏆 Target reached — match completed automatically!"
+            : "🏏 All overs completed — match finished automatically!"
           : "Match completed!"
       }\n\n${firstTeamName}: ${firstScore.runs}/${firstScore.wickets}\n${chasingTeamName}: ${secondScore.runs}/${secondScore.wickets}\n\n${resultText}`
     );
