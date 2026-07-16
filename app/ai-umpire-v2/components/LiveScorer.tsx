@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase";
+import VoiceScoring from "./VoiceScoring";
 
 export type Player = {
   id: string;
@@ -463,6 +464,22 @@ export default function LiveScorer({
     await saveCurrentPlayers(nextStriker, nextNonStriker, bowlerId);
   }
 
+  async function refreshPlayerStats() {
+    const { error } = await supabase.rpc(
+      "refresh_player_match_stats",
+      {
+        p_match_id: match.id,
+      }
+    );
+
+    if (error) {
+      console.error(
+        "Player statistics refresh failed:",
+        error.message
+      );
+    }
+  }
+
   async function addBallEvent({
     runsBat = 0,
     extras = 0,
@@ -553,6 +570,7 @@ export default function LiveScorer({
     const inningsRunsAfter = score.runs + totalCompletedRuns;
 
     await loadBallEvents(match.id, inningsNumber);
+    await refreshPlayerStats();
 
     if (
       inningsNumber === 2 &&
@@ -647,6 +665,25 @@ export default function LiveScorer({
     });
   }
 
+  async function addVoiceWicket(
+    voiceWicketType:
+      | "bowled"
+      | "caught"
+      | "lbw"
+      | "run_out"
+      | "stumped"
+      | "hit_wicket"
+  ) {
+    setWicketType(voiceWicketType);
+
+    await addBallEvent({
+      isLegalBall: voiceWicketType !== "run_out",
+      isWicket: true,
+      selectedWicketType: voiceWicketType,
+      description: voiceWicketType.replaceAll("_", " "),
+    });
+  }
+
   async function undoLastBall() {
     if (!isAdmin || events.length === 0) return;
 
@@ -677,6 +714,7 @@ export default function LiveScorer({
     );
 
     await loadBallEvents(match.id, inningsNumber);
+    await refreshPlayerStats();
   }
 
   async function startSecondInnings() {
@@ -835,6 +873,7 @@ export default function LiveScorer({
       }\n\n${firstTeamName}: ${firstScore.runs}/${firstScore.wickets}\n${chasingTeamName}: ${secondScore.runs}/${secondScore.wickets}\n\n${resultText}`
     );
 
+    await refreshPlayerStats();
     await onMatchUpdated?.();
     await loadBallEvents(match.id, 2);
   }
@@ -1126,6 +1165,31 @@ export default function LiveScorer({
             </p>
           )}
       </section>
+
+      <VoiceScoring
+        disabled={
+          !isAdmin ||
+          saving ||
+          !battingFirstSide ||
+          !strikerId ||
+          !nonStrikerId ||
+          !bowlerId ||
+          match.match_status === "completed"
+        }
+        onRuns={(runs) =>
+          addBallEvent({
+            runsBat: runs,
+            isLegalBall: true,
+            description: `${runs} run${runs === 1 ? "" : "s"}`,
+          })
+        }
+        onWide={addWide}
+        onNoBall={addNoBall}
+        onBye={addBye}
+        onLegBye={addLegBye}
+        onWicket={addVoiceWicket}
+        onUndo={undoLastBall}
+      />
 
       <section className="rounded-3xl bg-slate-900 p-6">
         <h2 className="text-2xl font-bold">Live Scoring Controls</h2>
