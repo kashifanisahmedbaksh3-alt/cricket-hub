@@ -97,7 +97,7 @@ export default async function Home() {
           <Link href="/captains" className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
             👑 <div className="mt-2 font-bold">Captains</div>
           </Link>
-          <Link href="/ai-umpire"  className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
+          <Link href="/ai-umpire-v2"  className="rounded-2xl bg-slate-900 p-5 hover:bg-slate-800">
            🤖 <div className="mt-2 font-bold">AI Match Centre</div>
           </Link>
         </div>

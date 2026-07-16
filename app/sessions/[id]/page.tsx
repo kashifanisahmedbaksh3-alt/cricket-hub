@@ -1,5 +1,5 @@
 "use client";
-
+import TeamSetup from "./components/TeamSetup";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
@@ -462,7 +462,15 @@ export default function SessionDetailPage() {
             ))}
           </div>
         </section>
-
+        <TeamSetup
+          sessionId={id}
+          sessionPlayers={session.session_players || []}
+          initialCaptainAId={session.captain_a_player_id}
+          initialCaptainBId={session.captain_b_player_id}
+          initialTeamAName={session.team_a_name}
+          initialTeamBName={session.team_b_name}
+          onSaved={loadSession}
+        />
         <section className="mt-8 rounded-2xl bg-slate-900 p-6">
           <h2 className="text-2xl font-semibold">💰 Payments</h2>
           <p className="mt-1 text-sm text-slate-400">
