@@ -3,7 +3,7 @@ import TeamSetup from "./components/TeamSetup";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
-
+import SessionFinance from "./components/SessionFinance";
 type SessionPlayer = {
   id: string;
   player_id: string;
@@ -552,7 +552,11 @@ export default function SessionDetailPage() {
             </table>
           </div>
         </section>
-
+        <SessionFinance
+          sessionId={id}
+          isAdmin={isAdmin}
+          onChanged={loadSession}
+        />
         <section id="matches" className="mt-8 rounded-2xl bg-slate-900 p-6">
           <h2 className="text-2xl font-semibold">🏏 Match Centre</h2>
           <p className="mt-1 text-sm text-slate-400">

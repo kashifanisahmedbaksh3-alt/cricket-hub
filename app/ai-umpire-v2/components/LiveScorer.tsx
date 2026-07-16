@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase";
 import VoiceScoring from "./VoiceScoring";
+import CameraUmpire, { CameraDecision } from "./CameraUmpire";
 
 export type Player = {
   id: string;
@@ -702,6 +703,36 @@ export default function LiveScorer({
     });
   }
 
+  async function applyCameraDecision(
+    decision: CameraDecision
+  ) {
+    switch (decision) {
+      case "fair":
+        await addBallEvent({
+          runsBat: 0,
+          isLegalBall: true,
+          description: "Fair delivery / dot ball",
+        });
+        return;
+
+      case "wide":
+        await addWide();
+        return;
+
+      case "no_ball":
+        await addNoBall();
+        return;
+
+      case "bowled":
+      case "caught":
+      case "lbw":
+      case "run_out":
+      case "stumped":
+        await addVoiceWicket(decision);
+        return;
+    }
+  }
+
   async function undoLastBall() {
     if (!isAdmin || events.length === 0) return;
 
@@ -1289,6 +1320,19 @@ export default function LiveScorer({
         onLegBye={addLegBye}
         onWicket={addVoiceWicket}
         onUndo={undoLastBall}
+      />
+
+      <CameraUmpire
+        disabled={
+          !isAdmin ||
+          saving ||
+          !battingFirstSide ||
+          !strikerId ||
+          !nonStrikerId ||
+          !bowlerId ||
+          match.match_status === "completed"
+        }
+        onDecision={applyCameraDecision}
       />
 
       <section className="rounded-3xl bg-slate-900 p-6">
