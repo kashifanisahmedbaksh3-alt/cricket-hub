@@ -70,6 +70,8 @@ export default function SessionFinance({
   const [endingSession, setEndingSession] = useState(false);
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
+  const [whatsAppQueueIndex, setWhatsAppQueueIndex] = useState(0);
+  const [whatsAppQueueStarted, setWhatsAppQueueStarted] = useState(false);
 
   async function loadFinance() {
     setLoading(true);
@@ -395,6 +397,62 @@ export default function SessionFinance({
     )}`;
   }
 
+
+  const whatsAppQueue = useMemo(() => {
+    if (!data || !sessionEnded) return [];
+
+    return data.session_players
+      .map((row) => {
+        const paid = Number(row.amount_paid || 0);
+        const due = Math.max(summary.perPlayer - paid, 0);
+        const url = getWhatsAppUrl(row);
+
+        return { row, due, url };
+      })
+      .filter(
+        (item) =>
+          item.due > 0 &&
+          Boolean(item.url) &&
+          item.row.players?.whatsapp_opt_in !== false
+      );
+  }, [data, sessionEnded, summary.perPlayer]);
+
+  function startWhatsAppQueue() {
+    if (whatsAppQueue.length === 0) {
+      alert("No unpaid players with valid WhatsApp numbers were found.");
+      return;
+    }
+
+    setWhatsAppQueueIndex(0);
+    setWhatsAppQueueStarted(true);
+  }
+
+  function openNextWhatsApp() {
+    const current = whatsAppQueue[whatsAppQueueIndex];
+
+    if (!current) {
+      setWhatsAppQueueStarted(false);
+      alert("All WhatsApp reminders have been opened.");
+      return;
+    }
+
+    window.open(current.url, "_blank", "noopener,noreferrer");
+
+    const nextIndex = whatsAppQueueIndex + 1;
+
+    if (nextIndex >= whatsAppQueue.length) {
+      setWhatsAppQueueIndex(nextIndex);
+      setWhatsAppQueueStarted(false);
+    } else {
+      setWhatsAppQueueIndex(nextIndex);
+    }
+  }
+
+  function resetWhatsAppQueue() {
+    setWhatsAppQueueStarted(false);
+    setWhatsAppQueueIndex(0);
+  }
+
   if (loading) {
     return (
       <section className="mt-8 rounded-2xl bg-slate-900 p-6">
@@ -597,6 +655,80 @@ export default function SessionFinance({
             will be enabled after the SMS provider and DLT settings
             are connected.
           </p>
+
+          <div className="mt-5 rounded-2xl border border-green-500/30 bg-green-500/10 p-5">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-green-300">
+                  Send WhatsApp reminders in sequence
+                </h3>
+
+                <p className="mt-1 text-sm text-slate-300">
+                  Use one queue for all unpaid players. WhatsApp still
+                  requires you to press Send for each message.
+                </p>
+
+                <p className="mt-2 text-sm text-slate-400">
+                  Ready: {whatsAppQueue.length} player
+                  {whatsAppQueue.length === 1 ? "" : "s"}
+                </p>
+              </div>
+
+              {!whatsAppQueueStarted ? (
+                <button
+                  type="button"
+                  onClick={startWhatsAppQueue}
+                  disabled={whatsAppQueue.length === 0}
+                  className="rounded-xl bg-green-500 px-5 py-3 font-semibold text-slate-950 disabled:opacity-40"
+                >
+                  Start WhatsApp Queue
+                </button>
+              ) : (
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={openNextWhatsApp}
+                    className="rounded-xl bg-green-500 px-5 py-3 font-semibold text-slate-950"
+                  >
+                    Open Next WhatsApp (
+                    {Math.min(
+                      whatsAppQueueIndex + 1,
+                      whatsAppQueue.length
+                    )}
+                    /{whatsAppQueue.length})
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={resetWhatsAppQueue}
+                    className="rounded-xl border border-slate-500 px-5 py-3 text-slate-300"
+                  >
+                    Stop Queue
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {whatsAppQueueStarted &&
+              whatsAppQueue[whatsAppQueueIndex] && (
+                <div className="mt-4 rounded-xl bg-slate-900 p-4">
+                  <p className="text-sm text-slate-400">
+                    Next player
+                  </p>
+
+                  <p className="mt-1 font-semibold">
+                    {
+                      whatsAppQueue[whatsAppQueueIndex].row.players
+                        ?.name
+                    }
+                    {" • "}₹
+                    {whatsAppQueue[
+                      whatsAppQueueIndex
+                    ].due.toFixed(2)} due
+                  </p>
+                </div>
+              )}
+          </div>
 
           <div className="mt-5 space-y-3">
             {data.session_players.map((row) => {
