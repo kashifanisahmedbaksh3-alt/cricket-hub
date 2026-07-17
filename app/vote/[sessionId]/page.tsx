@@ -169,9 +169,16 @@ export default function VotingPage() {
 
   async function shareVotingLink() {
     const url = window.location.href;
-    const text = `🏏 ${session?.session_name || "Sunday Cricket"}\n\n${formatDate(
-      session?.session_date
-    )}\n📍 ${session?.turfs?.name || "Venue to be confirmed"}\n\nTap your name to confirm:\n${url}`;
+    const text = `🏏 ${session?.session_name || "Sunday Cricket"}
+
+${formatDate(session?.session_date)}
+📍 ${session?.turfs?.name || "Venue to be confirmed"}
+
+✅ Confirmed: ${confirmedCount}
+⏳ Waiting: ${waitingCount}
+
+Tap your name and view the live voting chart:
+${url}`;
 
     if (navigator.share) {
       try {
