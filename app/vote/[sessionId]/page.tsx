@@ -199,7 +199,11 @@ export default function VotingPage() {
       return false;
     }
 
-    const result = Array.isArray(data) ? data[0] : null;
+    const result = Array.isArray(data)
+      ? data[0]
+      : data && typeof data === "object"
+        ? data
+        : null;
 
     if (!result) {
       localStorage.removeItem(SAVED_MOBILE_KEY);
@@ -244,7 +248,11 @@ export default function VotingPage() {
       return;
     }
 
-    const result = Array.isArray(data) ? data[0] : null;
+    const result = Array.isArray(data)
+      ? data[0]
+      : data && typeof data === "object"
+        ? data
+        : null;
 
     setVerifiedPlayer((current) =>
       current
@@ -555,6 +563,7 @@ ${url}`;
                 <button
                   type="button"
                   onClick={() => {
+                    localStorage.removeItem(SAVED_MOBILE_KEY);
                     setVerifiedPlayer(null);
                     setMobile("");
                   }}
