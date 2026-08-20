@@ -153,6 +153,9 @@ export default function LiveScorer({
   const [wicketType, setWicketType] = useState("bowled");
   const [saving, setSaving] = useState(false);
   const [loadingEvents, setLoadingEvents] = useState(true);
+  const [activeScreen, setActiveScreen] = useState<
+    "scorer" | "camera" | "voice" | "details"
+  >("scorer");
 
   useEffect(() => {
     setInningsNumber(match.current_innings || 1);
@@ -1026,6 +1029,7 @@ export default function LiveScorer({
 
   return (
     <div className="mt-8 space-y-8">
+      {!battingFirstSide && (
       <section className="rounded-3xl bg-slate-900 p-6">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
@@ -1144,8 +1148,38 @@ export default function LiveScorer({
           </p>
         )}
       </section>
+      )}
 
-      <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 to-slate-800 p-6">
+      {battingFirstSide && (
+        <section className="sticky top-0 z-20 -mx-2 rounded-2xl border border-slate-700 bg-slate-950/95 p-3 backdrop-blur">
+          <div className="grid grid-cols-4 gap-2">
+            <NavButton
+              label="🏏 Score"
+              active={activeScreen === "scorer"}
+              onClick={() => setActiveScreen("scorer")}
+            />
+            <NavButton
+              label="🎙 Voice"
+              active={activeScreen === "voice"}
+              onClick={() => setActiveScreen("voice")}
+            />
+            <NavButton
+              label="📷 Camera"
+              active={activeScreen === "camera"}
+              onClick={() => setActiveScreen("camera")}
+            />
+            <NavButton
+              label="📊 Details"
+              active={activeScreen === "details"}
+              onClick={() => setActiveScreen("details")}
+            />
+          </div>
+        </section>
+      )}
+
+      {activeScreen === "scorer" && (
+      <>
+      <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 to-slate-800 p-4 sm:p-6">
         <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
           <div>
             <p className="text-sm uppercase tracking-widest text-green-300">
@@ -1228,8 +1262,8 @@ export default function LiveScorer({
         </div>
       </section>
 
-      <section className="rounded-3xl bg-slate-900 p-6">
-        <h2 className="text-2xl font-bold">Current Players</h2>
+      <section className="rounded-2xl bg-slate-900 p-4">
+        <h2 className="text-lg font-bold">Current Players</h2>
 
         <p className="mt-1 text-sm text-slate-400">
           Batting: {battingTeamName} • Bowling: {bowlingTeamName}
@@ -1297,53 +1331,30 @@ export default function LiveScorer({
           )}
       </section>
 
-      <VoiceScoring
-        disabled={
-          !isAdmin ||
-          saving ||
-          !battingFirstSide ||
-          !strikerId ||
-          !nonStrikerId ||
-          !bowlerId ||
-          match.match_status === "completed"
-        }
-        onRuns={(runs) =>
-          addBallEvent({
-            runsBat: runs,
-            isLegalBall: true,
-            description: `${runs} run${runs === 1 ? "" : "s"}`,
-          })
-        }
-        onWide={addWide}
-        onNoBall={addNoBall}
-        onBye={addBye}
-        onLegBye={addLegBye}
-        onWicket={addVoiceWicket}
-        onUndo={undoLastBall}
-      />
+      <section className="rounded-2xl bg-slate-900 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold">Quick Scoring</h2>
+            <p className="text-xs text-slate-400">
+              Tap once — every ball saves immediately.
+            </p>
+          </div>
 
-      <CameraUmpire
-        disabled={
-          !isAdmin ||
-          saving ||
-          !battingFirstSide ||
-          !strikerId ||
-          !nonStrikerId ||
-          !bowlerId ||
-          match.match_status === "completed"
-        }
-        onDecision={applyCameraDecision}
-      />
+          <button
+            onClick={undoLastBall}
+            disabled={!isAdmin || events.length === 0}
+            className="rounded-xl border border-yellow-400 px-3 py-2 text-sm font-semibold text-yellow-300 disabled:opacity-40"
+          >
+            ↩ Undo
+          </button>
+        </div>
 
-      <section className="rounded-3xl bg-slate-900 p-6">
-        <h2 className="text-2xl font-bold">Live Scoring Controls</h2>
-
-        <div className="mt-6 grid grid-cols-3 gap-3 md:grid-cols-7">
-          {[0, 1, 2, 3, 4, 5, 6].map((runs) => (
-            <ScoreButton
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          {[0, 1, 2, 3, 4, 6].map((runs) => (
+            <button
               key={runs}
-              label={String(runs)}
-              disabled={scoringDisabled}
+              type="button"
+              disabled={scoringDisabled || !strikerId || !nonStrikerId}
               onClick={() =>
                 addBallEvent({
                   runsBat: runs,
@@ -1351,40 +1362,49 @@ export default function LiveScorer({
                   description: `${runs} run${runs === 1 ? "" : "s"}`,
                 })
               }
-            />
+              className={`min-h-16 rounded-2xl text-2xl font-black disabled:cursor-not-allowed disabled:opacity-40 ${
+                runs === 4 || runs === 6
+                  ? "bg-green-400 text-slate-950"
+                  : "bg-green-500 text-slate-950"
+              }`}
+            >
+              {runs}
+            </button>
           ))}
         </div>
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
+        <div className="mt-3 grid grid-cols-2 gap-2">
           <ActionButton
             label="Wide +1"
-            disabled={scoringDisabled}
+            disabled={scoringDisabled || !strikerId || !nonStrikerId}
             onClick={addWide}
           />
 
           <ActionButton
             label="No-ball +1"
-            disabled={scoringDisabled}
+            disabled={scoringDisabled || !strikerId || !nonStrikerId}
             onClick={addNoBall}
           />
 
           <ActionButton
             label="Bye +1"
-            disabled={scoringDisabled}
+            disabled={scoringDisabled || !strikerId || !nonStrikerId}
             onClick={() => addBye(1)}
           />
 
           <ActionButton
             label="Leg Bye +1"
-            disabled={scoringDisabled}
+            disabled={scoringDisabled || !strikerId || !nonStrikerId}
             onClick={() => addLegBye(1)}
           />
         </div>
 
-        <div className="mt-5 rounded-2xl border border-slate-700 bg-slate-800 p-5">
-          <h3 className="text-lg font-bold">Wicket</h3>
+        <details className="mt-3 rounded-2xl border border-red-500/30 bg-red-500/10 p-3">
+          <summary className="cursor-pointer font-bold text-red-200">
+            🟥 Wicket
+          </summary>
 
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <div className="mt-3 grid gap-3">
             <select
               value={wicketType}
               onChange={(event) => setWicketType(event.target.value)}
@@ -1409,26 +1429,36 @@ export default function LiveScorer({
 
             <button
               onClick={addWicket}
-              disabled={
-                scoringDisabled ||
-                !strikerId
-              }
-              className="rounded-xl bg-red-500 px-5 py-3 font-bold disabled:opacity-40"
+              disabled={scoringDisabled || !strikerId || !nonStrikerId}
+              className="min-h-14 rounded-xl bg-red-500 px-5 py-3 text-lg font-black disabled:opacity-40"
             >
-              Wicket
+              Confirm Wicket
             </button>
+          </div>
+        </details>
+
+        <div className="mt-4 rounded-xl bg-slate-800 p-3">
+          <p className="text-xs uppercase tracking-wide text-slate-400">
+            Current Over
+          </p>
+
+          <div className="mt-2 flex flex-wrap gap-2">
+            {lastBalls.length === 0 ? (
+              <span className="text-sm text-slate-500">No balls yet</span>
+            ) : (
+              lastBalls.map((label, index) => (
+                <span
+                  key={`${label}-${index}`}
+                  className="flex h-9 min-w-9 items-center justify-center rounded-full bg-slate-700 px-2 font-bold"
+                >
+                  {label}
+                </span>
+              ))
+            )}
           </div>
         </div>
 
-        <div className="mt-6 grid gap-3 md:grid-cols-2">
-          <button
-            onClick={undoLastBall}
-            disabled={!isAdmin || events.length === 0}
-            className="rounded-xl border border-yellow-400 px-5 py-3 font-semibold text-yellow-300 disabled:opacity-40"
-          >
-            ↩ Undo Last Event
-          </button>
-
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
           {inningsNumber === 1 ? (
             <button
               onClick={startSecondInnings}
@@ -1451,12 +1481,81 @@ export default function LiveScorer({
               }
               className="rounded-xl bg-green-500 px-5 py-3 font-semibold text-slate-950 disabled:opacity-40"
             >
-              Finish Match & Save Result
+              Finish Match
             </button>
           )}
         </div>
       </section>
+      </>
+      )}
 
+      {activeScreen === "voice" && (
+        <VoiceScoring
+          disabled={
+            !isAdmin ||
+            saving ||
+            !battingFirstSide ||
+            !strikerId ||
+            !nonStrikerId ||
+            !bowlerId ||
+            match.match_status === "completed"
+          }
+          onRuns={(runs) =>
+            addBallEvent({
+              runsBat: runs,
+              isLegalBall: true,
+              description: `${runs} run${runs === 1 ? "" : "s"}`,
+            })
+          }
+          onWide={addWide}
+          onNoBall={addNoBall}
+          onBye={addBye}
+          onLegBye={addLegBye}
+          onWicket={addVoiceWicket}
+          onUndo={undoLastBall}
+        />
+      )}
+
+      {activeScreen === "camera" && (
+        <section className="space-y-4">
+          <div className="rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-blue-200">
+                  📷 Camera Umpire
+                </h2>
+                <p className="mt-1 text-sm text-slate-300">
+                  Camera controls are isolated here so live scoring stays fast.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setActiveScreen("scorer")}
+                className="rounded-xl bg-green-500 px-4 py-2 text-sm font-semibold text-slate-950"
+              >
+                Back to Score
+              </button>
+            </div>
+          </div>
+
+          <CameraUmpire
+            disabled={
+              !isAdmin ||
+              saving ||
+              !battingFirstSide ||
+              !strikerId ||
+              !nonStrikerId ||
+              !bowlerId ||
+              match.match_status === "completed"
+            }
+            onDecision={applyCameraDecision}
+          />
+        </section>
+      )}
+
+      {activeScreen === "details" && (
+      <>
       <section className="grid gap-6 lg:grid-cols-2">
         <ScorecardTable
           title="Batting Scorecard"
@@ -1521,6 +1620,8 @@ export default function LiveScorer({
           ))}
         </div>
       </section>
+      </>
+      )}
     </div>
   );
 }
@@ -1585,6 +1686,30 @@ function PlayerSelect({
           ))}
       </select>
     </div>
+  );
+}
+
+function NavButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl px-2 py-2 text-xs font-semibold transition sm:text-sm ${
+        active
+          ? "bg-green-500 text-slate-950"
+          : "bg-slate-800 text-slate-300"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 

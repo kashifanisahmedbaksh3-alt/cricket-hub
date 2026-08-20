@@ -43,6 +43,8 @@ type Match = {
   striker_id: string | null;
   non_striker_id: string | null;
   bowler_id: string | null;
+  team_a_max_wickets: number | null;
+  team_b_max_wickets: number | null;
 };
 
 type Session = {
@@ -125,6 +127,8 @@ export default function AiUmpireV2Page() {
           team_a_wickets,
           team_b_runs,
           team_b_wickets,
+          team_a_max_wickets,
+          team_b_max_wickets,
           overs,
           winner,
           result_text,
@@ -293,7 +297,7 @@ export default function AiUmpireV2Page() {
     if (!selectedSession.team_a_name || !selectedSession.team_b_name) {
       alert("Session team names are not configured.");
       return;
-    }
+      }
 
     setCreatingMatch(true);
 
@@ -305,6 +309,8 @@ export default function AiUmpireV2Page() {
         overs,
         team_a: selectedSession.team_a_name,
         team_b: selectedSession.team_b_name,
+        team_a_max_wickets: Math.max(teamAPlayers.length - 1, 1),
+        team_b_max_wickets: Math.max(teamBPlayers.length - 1, 1),
         match_status: "not_started",
         current_innings: 1,
         team_a_runs: 0,
