@@ -25,111 +25,243 @@ type AnalysisResult = {
   reason: string;
 };
 
-const MAX_RECORDING_SECONDS = 6;
+type BufferedChunk = {
+  blob: Blob;
+  createdAt: number;
+};
+
+/*
+ * We keep approximately the previous 8 seconds
+ * available for instant replay.
+ */
+const REVIEW_BUFFER_SECONDS = 8;
+
+/*
+ * MediaRecorder emits a chunk every 500ms.
+ * Smaller chunks make the rolling window smoother.
+ */
+const RECORDER_SLICE_MS = 500;
 
 export default function CameraUmpire({
   disabled = false,
   onDecision,
 }: CameraUmpireProps) {
-  const liveVideoRef = useRef<HTMLVideoElement | null>(null);
-  const replayVideoRef = useRef<HTMLVideoElement | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const recordedChunksRef = useRef<BlobPart[]>([]);
-  const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  );
+  const liveVideoRef =
+    useRef<HTMLVideoElement | null>(null);
 
-  const [cameraSupported, setCameraSupported] = useState(true);
-  const [cameraActive, setCameraActive] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [recordedUrl, setRecordedUrl] = useState("");
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [playbackRate, setPlaybackRate] = useState("0.5");
-  const [facingMode, setFacingMode] = useState<"environment" | "user">(
-    "environment"
-  );
-  const [errorMessage, setErrorMessage] = useState("");
-  const [applyingDecision, setApplyingDecision] = useState(false);
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(
-    null
-  );
+  const replayVideoRef =
+    useRef<HTMLVideoElement | null>(null);
+
+  const mediaRecorderRef =
+    useRef<MediaRecorder | null>(null);
+
+  const streamRef =
+    useRef<MediaStream | null>(null);
+
+  /*
+   * Rolling chunks.
+   */
+  const rollingChunksRef =
+    useRef<BufferedChunk[]>([]);
+
+  /*
+   * Some browsers need the first recorder
+   * chunk because it contains container metadata.
+   */
+  const initialChunkRef =
+    useRef<Blob | null>(null);
+
+  const recordedUrlRef =
+    useRef("");
+
+  const [cameraSupported, setCameraSupported] =
+    useState(true);
+
+  const [cameraActive, setCameraActive] =
+    useState(false);
+
+  const [umpireActive, setUmpireActive] =
+    useState(false);
+
+  const [bufferSeconds, setBufferSeconds] =
+    useState(0);
+
+  const [recordedUrl, setRecordedUrl] =
+    useState("");
+
+  const [playbackRate, setPlaybackRate] =
+    useState("0.5");
+
+  const [facingMode, setFacingMode] =
+    useState<"environment" | "user">(
+      "environment"
+    );
+
+  const [errorMessage, setErrorMessage] =
+    useState("");
+
+  const [
+    applyingDecision,
+    setApplyingDecision,
+  ] = useState(false);
+
+  const [creatingReplay, setCreatingReplay] =
+    useState(false);
+
+  const [analysis, setAnalysis] =
+    useState<AnalysisResult | null>(null);
 
   const statusText = useMemo(() => {
-    if (disabled) return "Scoring unavailable";
-    if (recording) return `Recording ${recordingSeconds}s`;
-    if (cameraActive) return "Camera ready";
-    return "Camera stopped";
-  }, [disabled, recording, recordingSeconds, cameraActive]);
+    if (disabled) {
+      return "Scoring unavailable";
+    }
 
+    if (umpireActive) {
+      return "AI Umpire Live";
+    }
+
+    if (cameraActive) {
+      return "Camera ready";
+    }
+
+    return "Camera stopped";
+  }, [
+    disabled,
+    umpireActive,
+    cameraActive,
+  ]);
+
+  /*
+   * Browser capability check.
+   */
   useEffect(() => {
     if (
       typeof navigator === "undefined" ||
-      !navigator.mediaDevices?.getUserMedia ||
-      typeof MediaRecorder === "undefined"
+      !navigator.mediaDevices
+        ?.getUserMedia ||
+      typeof MediaRecorder ===
+        "undefined"
     ) {
       setCameraSupported(false);
     }
 
     return () => {
-      stopCamera();
+      stopEverything();
 
-      if (recordedUrl) {
-        URL.revokeObjectURL(recordedUrl);
+      if (recordedUrlRef.current) {
+        URL.revokeObjectURL(
+          recordedUrlRef.current
+        );
       }
     };
   }, []);
 
+  /*
+   * Apply selected slow-motion rate
+   * whenever replay changes.
+   */
   useEffect(() => {
-    if (!recording) return;
+    if (!replayVideoRef.current) {
+      return;
+    }
 
-    setRecordingSeconds(0);
-
-    const interval = setInterval(() => {
-      setRecordingSeconds((current) => current + 1);
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [recording]);
-
-  useEffect(() => {
-    if (!replayVideoRef.current) return;
-
-    replayVideoRef.current.playbackRate = Number(playbackRate);
+    replayVideoRef.current.playbackRate =
+      Number(playbackRate);
   }, [playbackRate, recordedUrl]);
 
+  /*
+   * Update rolling-buffer indicator.
+   */
+  useEffect(() => {
+    if (!umpireActive) {
+      setBufferSeconds(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const chunks =
+        rollingChunksRef.current;
+
+      if (chunks.length === 0) {
+        setBufferSeconds(0);
+        return;
+      }
+
+      const oldest =
+        chunks[0].createdAt;
+
+      const newest =
+        chunks[
+          chunks.length - 1
+        ].createdAt;
+
+      const seconds =
+        Math.max(
+          1,
+          Math.round(
+            (newest - oldest) /
+              1000
+          )
+        );
+
+      setBufferSeconds(
+        Math.min(
+          seconds,
+          REVIEW_BUFFER_SECONDS
+        )
+      );
+    }, 500);
+
+    return () =>
+      clearInterval(interval);
+  }, [umpireActive]);
+
   async function startCamera() {
-    if (!cameraSupported || disabled) return;
+    if (
+      !cameraSupported ||
+      disabled
+    ) {
+      return;
+    }
 
     setErrorMessage("");
     setAnalysis(null);
 
     try {
-      stopCamera();
+      stopEverything();
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: {
-            ideal: facingMode,
-          },
-          width: {
-            ideal: 1280,
-          },
-          height: {
-            ideal: 720,
-          },
-          frameRate: {
-            ideal: 30,
-            max: 60,
-          },
-        },
-      });
+      const stream =
+        await navigator.mediaDevices.getUserMedia(
+          {
+            audio: false,
+
+            video: {
+              facingMode: {
+                ideal: facingMode,
+              },
+
+              width: {
+                ideal: 1280,
+              },
+
+              height: {
+                ideal: 720,
+              },
+
+              frameRate: {
+                ideal: 30,
+                max: 60,
+              },
+            },
+          }
+        );
 
       streamRef.current = stream;
 
       if (liveVideoRef.current) {
-        liveVideoRef.current.srcObject = stream;
+        liveVideoRef.current.srcObject =
+          stream;
+
         await liveVideoRef.current.play();
       }
 
@@ -145,45 +277,109 @@ export default function CameraUmpire({
     }
   }
 
-  function stopCamera() {
-    if (stopTimerRef.current) {
-      clearTimeout(stopTimerRef.current);
-      stopTimerRef.current = null;
-    }
+  function stopEverything() {
+    const recorder =
+      mediaRecorderRef.current;
 
     if (
-      mediaRecorderRef.current &&
-      mediaRecorderRef.current.state !== "inactive"
+      recorder &&
+      recorder.state !== "inactive"
     ) {
-      mediaRecorderRef.current.stop();
+      try {
+        recorder.stop();
+      } catch {
+        // Safe cleanup.
+      }
     }
 
-    streamRef.current?.getTracks().forEach((track) => {
-      track.stop();
-    });
+    mediaRecorderRef.current = null;
+
+    streamRef.current
+      ?.getTracks()
+      .forEach((track) => {
+        track.stop();
+      });
 
     streamRef.current = null;
 
     if (liveVideoRef.current) {
-      liveVideoRef.current.srcObject = null;
+      liveVideoRef.current.srcObject =
+        null;
     }
 
+    rollingChunksRef.current = [];
+    initialChunkRef.current = null;
+
     setCameraActive(false);
-    setRecording(false);
+    setUmpireActive(false);
+    setBufferSeconds(0);
+  }
+
+  function stopCamera() {
+    stopEverything();
   }
 
   async function switchCamera() {
-    if (recording) return;
+    if (umpireActive) {
+      return;
+    }
 
     const nextMode =
-      facingMode === "environment" ? "user" : "environment";
+      facingMode === "environment"
+        ? "user"
+        : "environment";
 
     setFacingMode(nextMode);
 
-    if (cameraActive) {
-      setTimeout(() => {
-        startCamera();
-      }, 50);
+    if (!cameraActive) {
+      return;
+    }
+
+    stopEverything();
+
+    try {
+      const stream =
+        await navigator.mediaDevices.getUserMedia(
+          {
+            audio: false,
+
+            video: {
+              facingMode: {
+                ideal: nextMode,
+              },
+
+              width: {
+                ideal: 1280,
+              },
+
+              height: {
+                ideal: 720,
+              },
+
+              frameRate: {
+                ideal: 30,
+                max: 60,
+              },
+            },
+          }
+        );
+
+      streamRef.current = stream;
+
+      if (liveVideoRef.current) {
+        liveVideoRef.current.srcObject =
+          stream;
+
+        await liveVideoRef.current.play();
+      }
+
+      setCameraActive(true);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to switch camera."
+      );
     }
   }
 
@@ -195,128 +391,340 @@ export default function CameraUmpire({
       "video/mp4",
     ];
 
-    return preferredTypes.find((type) =>
-      MediaRecorder.isTypeSupported(type)
+    return preferredTypes.find(
+      (type) =>
+        MediaRecorder.isTypeSupported(
+          type
+        )
     );
   }
 
-  function startDeliveryRecording() {
+  /*
+   * Press this ONE TIME before play begins.
+   *
+   * The recorder then continuously emits
+   * small chunks while only the newest
+   * ~8 seconds remain in memory.
+   */
+  function startAIUmpire() {
     if (
       disabled ||
       !cameraActive ||
       !streamRef.current ||
-      recording
+      umpireActive
     ) {
       return;
     }
 
     setErrorMessage("");
     setAnalysis(null);
-    recordedChunksRef.current = [];
 
-    if (recordedUrl) {
-      URL.revokeObjectURL(recordedUrl);
-      setRecordedUrl("");
-    }
+    rollingChunksRef.current = [];
+    initialChunkRef.current = null;
+
+    clearReplay();
 
     try {
-      const mimeType = chooseRecorderMimeType();
+      const mimeType =
+        chooseRecorderMimeType();
 
       const recorder = mimeType
-        ? new MediaRecorder(streamRef.current, {
-            mimeType,
-          })
-        : new MediaRecorder(streamRef.current);
+        ? new MediaRecorder(
+            streamRef.current,
+            {
+              mimeType,
+            }
+          )
+        : new MediaRecorder(
+            streamRef.current
+          );
 
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          recordedChunksRef.current.push(event.data);
+      recorder.ondataavailable = (
+        event
+      ) => {
+        if (
+          !event.data ||
+          event.data.size === 0
+        ) {
+          return;
         }
+
+        /*
+         * Preserve first chunk because WebM
+         * metadata may live inside it.
+         */
+        if (
+          !initialChunkRef.current
+        ) {
+          initialChunkRef.current =
+            event.data;
+        }
+
+        const now = Date.now();
+
+        rollingChunksRef.current.push({
+          blob: event.data,
+          createdAt: now,
+        });
+
+        /*
+         * Discard anything older than
+         * our rolling replay window.
+         */
+        const cutoff =
+          now -
+          REVIEW_BUFFER_SECONDS *
+            1000;
+
+        rollingChunksRef.current =
+          rollingChunksRef.current.filter(
+            (chunk) =>
+              chunk.createdAt >=
+              cutoff
+          );
       };
 
       recorder.onerror = () => {
-        setErrorMessage("Delivery recording failed.");
-        setRecording(false);
+        setErrorMessage(
+          "Continuous camera recording failed."
+        );
+
+        setUmpireActive(false);
       };
 
       recorder.onstop = () => {
-        const blob = new Blob(recordedChunksRef.current, {
-          type: recorder.mimeType || "video/webm",
-        });
-
-        const url = URL.createObjectURL(blob);
-        setRecordedUrl(url);
-        setRecording(false);
-        setRecordingSeconds(0);
-
-        runPrototypeAnalysis();
+        setUmpireActive(false);
       };
 
-      mediaRecorderRef.current = recorder;
-      recorder.start(250);
-      setRecording(true);
+      mediaRecorderRef.current =
+        recorder;
 
-      stopTimerRef.current = setTimeout(() => {
-        stopDeliveryRecording();
-      }, MAX_RECORDING_SECONDS * 1000);
+      recorder.start(
+        RECORDER_SLICE_MS
+      );
+
+      setUmpireActive(true);
     } catch (error) {
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Unable to start delivery recording."
+          : "Unable to start AI Umpire."
       );
     }
   }
 
-  function stopDeliveryRecording() {
-    if (stopTimerRef.current) {
-      clearTimeout(stopTimerRef.current);
-      stopTimerRef.current = null;
+  /*
+   * Stops the rolling recorder but
+   * leaves camera preview available.
+   */
+  function stopAIUmpire() {
+    const recorder =
+      mediaRecorderRef.current;
+
+    if (
+      recorder &&
+      recorder.state !== "inactive"
+    ) {
+      try {
+        recorder.stop();
+      } catch {
+        // Safe stop.
+      }
     }
 
-    const recorder = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
 
-    if (recorder && recorder.state !== "inactive") {
-      recorder.stop();
+    rollingChunksRef.current = [];
+    initialChunkRef.current = null;
+
+    setUmpireActive(false);
+    setBufferSeconds(0);
+  }
+
+  /*
+   * Called AFTER a delivery when
+   * somebody wants a replay.
+   *
+   * No need to start recording before
+   * the ball.
+   */
+  async function reviewLastBall() {
+    if (
+      !umpireActive ||
+      creatingReplay
+    ) {
+      return;
+    }
+
+    const recorder =
+      mediaRecorderRef.current;
+
+    if (
+      !recorder ||
+      recorder.state === "inactive"
+    ) {
+      setErrorMessage(
+        "AI Umpire is not currently running."
+      );
+
+      return;
+    }
+
+    setCreatingReplay(true);
+    setErrorMessage("");
+    setAnalysis(null);
+
+    try {
+      /*
+       * Force the recorder to flush its
+       * most recent video data.
+       */
+      try {
+        recorder.requestData();
+      } catch {
+        // Some browsers may ignore requestData.
+      }
+
+      /*
+       * Small delay gives ondataavailable
+       * time to deliver the newest chunk.
+       */
+      await new Promise<void>(
+        (resolve) => {
+          setTimeout(
+            resolve,
+            RECORDER_SLICE_MS + 150
+          );
+        }
+      );
+
+      const rollingChunks =
+        rollingChunksRef.current;
+
+      if (
+        rollingChunks.length === 0
+      ) {
+        setErrorMessage(
+          "There is not enough video in the replay buffer yet. Wait a few seconds and try again."
+        );
+
+        return;
+      }
+
+      const mimeType =
+        recorder.mimeType ||
+        "video/webm";
+
+      const parts: BlobPart[] = [];
+
+      /*
+       * Keep browser/container metadata
+       * when it is not already the first
+       * retained rolling chunk.
+       */
+      if (
+        initialChunkRef.current &&
+        rollingChunks[0]?.blob !==
+          initialChunkRef.current
+      ) {
+        parts.push(
+          initialChunkRef.current
+        );
+      }
+
+      rollingChunks.forEach(
+        (chunk) => {
+          parts.push(chunk.blob);
+        }
+      );
+
+      const blob = new Blob(parts, {
+        type: mimeType,
+      });
+
+      if (blob.size === 0) {
+        setErrorMessage(
+          "Unable to create replay clip."
+        );
+
+        return;
+      }
+
+      if (recordedUrlRef.current) {
+        URL.revokeObjectURL(
+          recordedUrlRef.current
+        );
+      }
+
+      const url =
+        URL.createObjectURL(blob);
+
+      recordedUrlRef.current = url;
+      setRecordedUrl(url);
+
+      runPrototypeAnalysis();
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to prepare replay."
+      );
+    } finally {
+      setCreatingReplay(false);
     }
   }
 
   function runPrototypeAnalysis() {
     /*
-      This is intentionally a safe placeholder.
+     * Safe Stage 1 placeholder.
+     *
+     * Later we'll replace this with
+     * actual computer-vision analysis:
+     *
+     * 1. Bowled / stump movement
+     * 2. Front-foot no-ball
+     * 3. Wide-line detection
+     * 4. Waist-high no-ball
+     * 5. Run-out / stumping
+     * 6. Experimental LBW
+     */
 
-      The next phase will replace this with frame extraction and a
-      cricket-specific model for:
-      - stump movement
-      - front-foot crease position
-      - wide-line crossing
-      - waist-high no-ball
-      - ball trajectory / LBW review
-    */
     setAnalysis({
       decision: "review",
       confidence: 0,
       reason:
-        "Replay captured. Select the umpire decision manually while the AI model is being trained.",
+        "Last-ball replay captured. Review the clip and confirm the umpire decision manually. Automatic AI detection will be added next.",
     });
   }
 
   function clearReplay() {
-    if (recordedUrl) {
-      URL.revokeObjectURL(recordedUrl);
+    if (recordedUrlRef.current) {
+      URL.revokeObjectURL(
+        recordedUrlRef.current
+      );
+
+      recordedUrlRef.current = "";
     }
 
     setRecordedUrl("");
     setAnalysis(null);
   }
 
-  async function applyDecision(decision: CameraDecision) {
-    if (disabled || applyingDecision) return;
+  async function applyDecision(
+    decision: CameraDecision
+  ) {
+    if (
+      disabled ||
+      applyingDecision
+    ) {
+      return;
+    }
 
     setApplyingDecision(true);
 
     try {
       await onDecision(decision);
+
       clearReplay();
     } catch (error) {
       setErrorMessage(
@@ -330,74 +738,121 @@ export default function CameraUmpire({
   }
 
   return (
-    <section className="rounded-3xl border border-cyan-500/30 bg-slate-900 p-6">
+    <section className="rounded-3xl border border-cyan-500/30 bg-slate-900 p-4 sm:p-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
           <h2 className="text-2xl font-bold">
             📷 Camera AI Umpire
           </h2>
 
-          <p className="mt-1 text-sm text-slate-400">
-            Record each delivery, review it in slow motion and confirm
-            the decision. Automatic detection will be added in stages.
+          <p className="mt-1 max-w-2xl text-sm text-slate-400">
+            Start the AI Umpire once.
+            The camera continuously keeps
+            the previous{" "}
+            {REVIEW_BUFFER_SECONDS}{" "}
+            seconds ready for instant
+            replay.
           </p>
         </div>
 
         <span
           className={`rounded-full px-3 py-2 text-sm font-semibold ${
-            cameraSupported
+            !cameraSupported
+              ? "bg-red-500/20 text-red-300"
+              : umpireActive
               ? "bg-green-500/20 text-green-300"
-              : "bg-red-500/20 text-red-300"
+              : "bg-slate-800 text-slate-300"
           }`}
         >
-          {cameraSupported ? statusText : "Camera not supported"}
+          {cameraSupported
+            ? statusText
+            : "Camera not supported"}
         </span>
       </div>
 
       {!cameraSupported && (
         <p className="mt-5 rounded-xl bg-red-500/10 p-4 text-red-300">
-          This browser does not support camera recording. Use the latest
-          Chrome or Edge on a phone and open the HTTPS Vercel site.
+          This browser does not
+          support camera recording.
+          Use the latest Chrome,
+          Edge or Safari on your
+          phone and open the HTTPS
+          Vercel site.
         </p>
       )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        {/* LIVE CAMERA */}
+
         <div className="rounded-2xl border border-slate-700 bg-slate-950 p-4">
           <div className="flex items-center justify-between gap-3">
-            <h3 className="font-bold">Live Camera</h3>
+            <div>
+              <h3 className="font-bold">
+                Live Camera
+              </h3>
+
+              {umpireActive && (
+                <p className="mt-1 text-xs font-semibold text-green-300">
+                  ● CONTINUOUS REVIEW
+                  ACTIVE
+                </p>
+              )}
+            </div>
 
             <span className="text-xs text-slate-400">
-              {facingMode === "environment"
+              {facingMode ===
+              "environment"
                 ? "Rear camera"
                 : "Front camera"}
             </span>
           </div>
 
-          <div className="mt-4 overflow-hidden rounded-xl bg-black">
+          <div className="relative mt-4 overflow-hidden rounded-xl bg-black">
             <video
               ref={liveVideoRef}
               muted
               playsInline
               className="aspect-video w-full object-cover"
             />
+
+            {umpireActive && (
+              <>
+                <div className="absolute left-3 top-3 rounded-full bg-red-600 px-3 py-1 text-xs font-bold text-white">
+                  ● LIVE
+                </div>
+
+                <div className="absolute bottom-3 right-3 rounded-full bg-black/70 px-3 py-1 text-xs font-semibold text-white">
+                  Buffer{" "}
+                  {bufferSeconds}s /{" "}
+                  {
+                    REVIEW_BUFFER_SECONDS
+                  }
+                  s
+                </div>
+              </>
+            )}
           </div>
+
+          {/* CAMERA CONTROLS */}
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             {!cameraActive ? (
               <button
                 type="button"
                 onClick={startCamera}
-                disabled={!cameraSupported || disabled}
+                disabled={
+                  !cameraSupported ||
+                  disabled
+                }
                 className="rounded-xl bg-cyan-500 px-5 py-3 font-semibold text-slate-950 disabled:opacity-40"
               >
-                Start Camera
+                📷 Start Camera
               </button>
             ) : (
               <button
                 type="button"
                 onClick={stopCamera}
-                disabled={recording}
-                className="rounded-xl border border-red-400 px-5 py-3 font-semibold text-red-300 disabled:opacity-40"
+                className="rounded-xl border border-red-400 px-5 py-3 font-semibold text-red-300"
               >
                 Stop Camera
               </button>
@@ -406,56 +861,114 @@ export default function CameraUmpire({
             <button
               type="button"
               onClick={switchCamera}
-              disabled={!cameraSupported || disabled || recording}
+              disabled={
+                !cameraSupported ||
+                disabled ||
+                umpireActive
+              }
               className="rounded-xl border border-slate-600 px-5 py-3 text-slate-300 disabled:opacity-40"
             >
-              Switch Camera
+              🔄 Switch Camera
             </button>
           </div>
 
+          {/* START / STOP AI UMPIRE */}
+
+          {cameraActive && (
+            <div className="mt-3">
+              {!umpireActive ? (
+                <button
+                  type="button"
+                  onClick={
+                    startAIUmpire
+                  }
+                  disabled={disabled}
+                  className="w-full rounded-xl bg-green-500 px-5 py-4 text-lg font-black text-slate-950 disabled:opacity-40"
+                >
+                  ▶ START AI UMPIRE
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={
+                    stopAIUmpire
+                  }
+                  className="w-full rounded-xl border border-yellow-400 px-5 py-3 font-semibold text-yellow-300"
+                >
+                  ■ Stop AI Umpire
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* REVIEW LAST BALL */}
+
           <div className="mt-3">
-            {!recording ? (
-              <button
-                type="button"
-                onClick={startDeliveryRecording}
-                disabled={!cameraActive || disabled}
-                className="w-full rounded-xl bg-red-500 px-5 py-4 text-lg font-bold text-white disabled:opacity-40"
-              >
-                ● Record Delivery
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={stopDeliveryRecording}
-                className="w-full rounded-xl bg-yellow-400 px-5 py-4 text-lg font-bold text-slate-950"
-              >
-                ■ Stop Recording ({recordingSeconds}s)
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={
+                reviewLastBall
+              }
+              disabled={
+                !umpireActive ||
+                creatingReplay ||
+                bufferSeconds < 1
+              }
+              className="w-full rounded-xl bg-red-500 px-5 py-5 text-xl font-black text-white shadow-lg disabled:opacity-40"
+            >
+              {creatingReplay
+                ? "Preparing Replay..."
+                : "🎥 REVIEW LAST BALL"}
+            </button>
           </div>
 
-          <p className="mt-3 text-xs text-slate-500">
-            Recording stops automatically after{" "}
-            {MAX_RECORDING_SECONDS} seconds.
-          </p>
+          {umpireActive && (
+            <p className="mt-3 text-center text-xs leading-5 text-slate-400">
+              You do not need to
+              record each delivery.
+              Tap{" "}
+              <strong className="text-white">
+                Review Last Ball
+              </strong>{" "}
+              only when a decision
+              needs checking.
+            </p>
+          )}
         </div>
+
+        {/* REPLAY */}
 
         <div className="rounded-2xl border border-slate-700 bg-slate-950 p-4">
           <div className="flex items-center justify-between gap-3">
-            <h3 className="font-bold">Delivery Replay</h3>
+            <h3 className="font-bold">
+              Last Ball Replay
+            </h3>
 
             <select
               value={playbackRate}
               onChange={(event) => {
-                setPlaybackRate(event.target.value);
+                setPlaybackRate(
+                  event.target.value
+                );
               }}
               disabled={!recordedUrl}
               className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm disabled:opacity-40"
             >
-              <option value="1">Normal speed</option>
-              <option value="0.75">0.75×</option>
-              <option value="0.5">0.5× slow motion</option>
-              <option value="0.25">0.25× slow motion</option>
+              <option value="1">
+                Normal
+              </option>
+
+              <option value="0.75">
+                0.75×
+              </option>
+
+              <option value="0.5">
+                0.5× Slow
+              </option>
+
+              <option value="0.25">
+                0.25× Super Slow
+              </option>
             </select>
           </div>
 
@@ -466,11 +979,15 @@ export default function CameraUmpire({
                 src={recordedUrl}
                 controls
                 playsInline
+                autoPlay
                 className="aspect-video w-full object-contain"
               />
             ) : (
-              <div className="flex aspect-video items-center justify-center px-4 text-center text-slate-500">
-                Record a delivery to review it here.
+              <div className="flex aspect-video items-center justify-center px-6 text-center text-sm text-slate-500">
+                Keep AI Umpire
+                running. If a delivery
+                needs checking, tap
+                Review Last Ball.
               </div>
             )}
           </div>
@@ -478,10 +995,10 @@ export default function CameraUmpire({
           {analysis && (
             <div className="mt-4 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-4">
               <p className="text-sm font-semibold text-cyan-300">
-                AI Review
+                🤖 AI Review
               </p>
 
-              <p className="mt-2 text-sm text-slate-300">
+              <p className="mt-2 text-sm leading-6 text-slate-300">
                 {analysis.reason}
               </p>
             </div>
@@ -490,65 +1007,124 @@ export default function CameraUmpire({
           {recordedUrl && (
             <>
               <h4 className="mt-5 font-bold">
-                Confirm Umpire Decision
+                Confirm Umpire
+                Decision
               </h4>
 
               <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-3">
                 <DecisionButton
                   label="Fair Ball"
-                  disabled={applyingDecision || disabled}
-                  onClick={() => applyDecision("fair")}
+                  disabled={
+                    applyingDecision ||
+                    disabled
+                  }
+                  onClick={() =>
+                    applyDecision(
+                      "fair"
+                    )
+                  }
                 />
 
                 <DecisionButton
                   label="Wide"
-                  disabled={applyingDecision || disabled}
-                  onClick={() => applyDecision("wide")}
+                  disabled={
+                    applyingDecision ||
+                    disabled
+                  }
+                  onClick={() =>
+                    applyDecision(
+                      "wide"
+                    )
+                  }
                 />
 
                 <DecisionButton
                   label="No-ball"
-                  disabled={applyingDecision || disabled}
-                  onClick={() => applyDecision("no_ball")}
+                  disabled={
+                    applyingDecision ||
+                    disabled
+                  }
+                  onClick={() =>
+                    applyDecision(
+                      "no_ball"
+                    )
+                  }
                 />
 
                 <DecisionButton
                   label="Bowled"
-                  disabled={applyingDecision || disabled}
-                  onClick={() => applyDecision("bowled")}
+                  disabled={
+                    applyingDecision ||
+                    disabled
+                  }
+                  onClick={() =>
+                    applyDecision(
+                      "bowled"
+                    )
+                  }
                 />
 
                 <DecisionButton
                   label="Caught"
-                  disabled={applyingDecision || disabled}
-                  onClick={() => applyDecision("caught")}
+                  disabled={
+                    applyingDecision ||
+                    disabled
+                  }
+                  onClick={() =>
+                    applyDecision(
+                      "caught"
+                    )
+                  }
                 />
 
                 <DecisionButton
                   label="LBW"
-                  disabled={applyingDecision || disabled}
-                  onClick={() => applyDecision("lbw")}
+                  disabled={
+                    applyingDecision ||
+                    disabled
+                  }
+                  onClick={() =>
+                    applyDecision("lbw")
+                  }
                 />
 
                 <DecisionButton
                   label="Run Out"
-                  disabled={applyingDecision || disabled}
-                  onClick={() => applyDecision("run_out")}
+                  disabled={
+                    applyingDecision ||
+                    disabled
+                  }
+                  onClick={() =>
+                    applyDecision(
+                      "run_out"
+                    )
+                  }
                 />
 
                 <DecisionButton
                   label="Stumped"
-                  disabled={applyingDecision || disabled}
-                  onClick={() => applyDecision("stumped")}
+                  disabled={
+                    applyingDecision ||
+                    disabled
+                  }
+                  onClick={() =>
+                    applyDecision(
+                      "stumped"
+                    )
+                  }
                 />
 
                 <button
                   type="button"
-                  onClick={clearReplay}
-                  disabled={applyingDecision}
+                  onClick={
+                    clearReplay
+                  }
+                  disabled={
+                    applyingDecision
+                  }
                   className="rounded-xl border border-slate-600 px-4 py-3 font-semibold text-slate-300 disabled:opacity-40"
                 >
-                  Discard Clip
+                  Return to Live
                 </button>
               </div>
             </>
@@ -563,12 +1139,21 @@ export default function CameraUmpire({
       )}
 
       <div className="mt-6 rounded-2xl border border-slate-700 bg-slate-800 p-5">
-        <h3 className="font-bold">AI detection roadmap</h3>
+        <h3 className="font-bold">
+          🧠 AI Detection Roadmap
+        </h3>
 
-        <p className="mt-2 text-sm text-slate-300">
-          Bowled/stump movement → front-foot no-ball → wide-line
-          detection → waist-high no-ball → run-out/stumping replay →
-          experimental LBW trajectory.
+        <p className="mt-2 text-sm leading-6 text-slate-300">
+          First we will make
+          continuous replay reliable
+          on the turf. Then:
+          Bowled / stump movement →
+          front-foot no-ball →
+          wide-line detection →
+          waist-high no-ball →
+          run-out / stumping →
+          experimental LBW
+          trajectory.
         </p>
       </div>
     </section>
