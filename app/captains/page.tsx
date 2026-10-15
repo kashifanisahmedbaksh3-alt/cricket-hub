@@ -138,98 +138,86 @@ export default function CaptainsPage() {
     );
   }, [captainHistory, selectedSession]);
 
-  const captainStats: CaptainStat[] = useMemo(() => {
-    return confirmedPlayers
-      .map((name: string) => {
-        const allCaptainSessions =
-          previousSessions.filter(
-            (session: any) =>
-              session.captain_a === name ||
-              session.captain_b === name
-          );
+ 
+const captainStats: CaptainStat[] = useMemo(() => {
+  return confirmedPlayers
+    .map((name: string) => {
+      const allCaptainSessions = previousSessions.filter(
+        (session: any) =>
+          session.captain_a === name ||
+          session.captain_b === name
+      );
 
-        const total = allCaptainSessions.length;
+      const total = allCaptainSessions.length;
 
-        const recentSessions =
-          previousSessions.slice(0, 4);
+      const recentCount = previousSessions
+        .slice(0, 4)
+        .filter(
+          (session: any) =>
+            session.captain_a === name ||
+            session.captain_b === name
+        ).length;
 
-        const recentCount =
-          recentSessions.filter(
-            (session: any) =>
-              session.captain_a === name ||
-              session.captain_b === name
-          ).length;
+      const lastDate =
+        allCaptainSessions.length > 0
+          ? allCaptainSessions.reduce(
+              (latest: string, session: any) =>
+                session.session_date > latest
+                  ? session.session_date
+                  : latest,
+              allCaptainSessions[0].session_date
+            )
+          : null;
 
-        const lastCaptainIndex =
-          previousSessions.findIndex(
-            (session: any) =>
-              session.captain_a === name ||
-              session.captain_b === name
-          );
+      const lastCaptainIndex = previousSessions.findIndex(
+        (session: any) =>
+          session.captain_a === name ||
+          session.captain_b === name
+      );
 
-        const sessionsSinceCaptain =
-          lastCaptainIndex === -1
-            ? previousSessions.length + 1
-            : lastCaptainIndex;
+      const sessionsSinceCaptain =
+        lastCaptainIndex === -1
+          ? previousSessions.length + 1
+          : lastCaptainIndex;
 
-        const lastDate =
-          allCaptainSessions.length > 0
-            ? allCaptainSessions[0].session_date
-            : null;
+      return {
+        name,
+        total,
+        recentCount,
+        lastDate,
+        sessionsSinceCaptain,
+        score: 0,
+      };
+    })
+    .sort((a, b) => {
+      // First priority: never captained.
+      if (a.lastDate === null && b.lastDate !== null) {
+        return -1;
+      }
 
-        /*
-         * Higher score = stronger captain recommendation.
-         */
-        let score = 100;
+      if (b.lastDate === null && a.lastDate !== null) {
+        return 1;
+      }
 
-        // Strong preference for players who never captained.
-        if (total === 0) {
-          score += 50;
+      // Second priority: oldest captaincy first.
+      if (a.lastDate && b.lastDate) {
+        const dateOrder = a.lastDate.localeCompare(b.lastDate);
+
+        if (dateOrder !== 0) {
+          return dateOrder;
         }
+      }
 
-        // Increase priority the longer it has been.
-        score += Math.min(
-          sessionsSinceCaptain * 12,
-          60
-        );
+      // Third priority: fewer total captaincies.
+      if (a.total !== b.total) {
+        return a.total - b.total;
+      }
 
-        // Penalise recent repetitions.
-        score -= recentCount * 35;
+      // Final deterministic tie-breaker.
+      return a.name.localeCompare(b.name);
+    });
+}, [confirmedPlayers, previousSessions]);
 
-        // Small overall fairness penalty.
-        score -= total * 4;
-
-        /*
-         * Strongly avoid somebody who captained
-         * the most recent cricket session.
-         */
-        const lastSession = previousSessions[0];
-
-        if (
-          lastSession &&
-          (lastSession.captain_a === name ||
-            lastSession.captain_b === name)
-        ) {
-          score -= 80;
-        }
-
-        return {
-          name,
-          total,
-          recentCount,
-          lastDate,
-          sessionsSinceCaptain,
-          score,
-        };
-      })
-      .sort((a, b) => {
-        if (b.score !== a.score) {
-          return b.score - a.score;
-        }
-
-        return a.name.localeCompare(b.name);
-      });
-  }, [confirmedPlayers, previousSessions]);
 
   const recommendedPair = useMemo(() => {
     if (captainStats.length < 2) {
@@ -333,43 +321,23 @@ export default function CaptainsPage() {
     return `${day}-${month}-${year}`;
   }
 
-  function rotationLabel(
-    stat: CaptainStat
-  ) {
-    if (stat.total === 0) {
-      return {
-        label: "Very High",
-        className: "text-green-300",
-        reason:
-          "Has not captained before",
-      };
-    }
-
-    if (stat.recentCount === 0) {
-      return {
-        label: "High",
-        className: "text-green-300",
-        reason:
-          "Has not captained recently",
-      };
-    }
-
-    if (stat.recentCount === 1) {
-      return {
-        label: "Medium",
-        className: "text-yellow-300",
-        reason:
-          "Captained once recently",
-      };
-    }
-
+  
+function rotationLabel(stat: CaptainStat) {
+  if (stat.total === 0) {
     return {
-      label: "Low",
-      className: "text-red-300",
-      reason:
-        "Has captained several recent sessions",
+      label: "Very High",
+      className: "text-green-300",
+      reason: "Never captained - first priority",
     };
   }
+
+  return {
+    label: "Date Based",
+    className: "text-cyan-300",
+    reason: `Last captained: ${formatDate(stat.lastDate)}. Ranked by oldest captaincy first.`,
+  };
+}
+
 
   if (loading) {
     return (
