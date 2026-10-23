@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { supabase } from "../lib/supabase";
 import { getCurrentUser } from "../lib/auth";
+
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
@@ -34,6 +35,13 @@ export default async function Home() {
       b.session_date.localeCompare(a.session_date)
     )[0];
 
+  const liveVotingSession =
+    upcomingSessions.find(
+      (session: any) =>
+        session.voting_enabled === true &&
+        session.voting_status === "open"
+    ) || null;
+
   const isUpcoming = mainSession?.session_date >= today;
 
   const playerCount = mainSession?.session_players?.length || 0;
@@ -41,19 +49,28 @@ export default async function Home() {
 
   const collected =
     mainSession?.session_players?.reduce(
-      (sum: number, p: any) => sum + Number(p.amount_paid || 0),
+      (sum: number, player: any) =>
+        sum + Number(player.amount_paid || 0),
       0
     ) || 0;
 
-  const pending = booking - collected;
+  const pending = Math.max(booking - collected, 0);
   const perPlayer = playerCount > 0 ? booking / playerCount : 0;
 
-  const liveVotingSession =
-    upcomingSessions.find(
-      (session: any) =>
-        session.voting_enabled === true &&
-        session.voting_status === "open"
-    ) || null;
+  const recentSessions = [...allSessions]
+    .sort((a: any, b: any) =>
+      b.session_date.localeCompare(a.session_date)
+    )
+    .slice(0, 5);
+
+  // The newest session by DATE (not creation time), used for homepage team preview.
+  const latestSession = recentSessions[0] || null;
+  const { data: latestTeamRows } = latestSession
+    ? await supabase.from("session_team_players")
+        .select("team_side").eq("session_id", latestSession.id)
+    : { data: [] as { team_side: string }[] };
+  const latestTeamA = (latestTeamRows || []).filter(row => row.team_side === "A").length;
+  const latestTeamB = (latestTeamRows || []).filter(row => row.team_side === "B").length;
 
   const confirmedVotes =
     liveVotingSession?.session_votes?.filter(
@@ -65,16 +82,17 @@ export default async function Home() {
     .select("id", { count: "exact", head: true })
     .eq("is_active", true);
 
-  const totalActivePlayers = Number(activePlayerCount || 0);
-  const waitingVotes = Math.max(totalActivePlayers - confirmedVotes, 0);
-  const votingPercent =
-    totalActivePlayers > 0
-      ? Math.round((confirmedVotes / totalActivePlayers) * 100)
-      : 0;
+  const waitingVotes = Math.max(
+    Number(activePlayerCount || 0) - confirmedVotes,
+    0
+  );
 
-  const recentSessions = [...allSessions].sort((a: any, b: any) =>
-    b.session_date.localeCompare(a.session_date)
-  ).slice(0, 5);
+  const votingPercent =
+    Number(activePlayerCount || 0) > 0
+      ? Math.round(
+          (confirmedVotes / Number(activePlayerCount || 0)) * 100
+        )
+      : 0;
 
   return (
     <main className="min-h-screen bg-slate-950 p-6 text-white">
@@ -86,7 +104,9 @@ export default async function Home() {
 
         <div className="mt-4 rounded-2xl bg-slate-900 p-4">
           {user ? (
-            <p className="text-green-300">👑 Admin logged in: {user.email}</p>
+            <p className="text-green-300">
+              👑 Admin logged in: {user.email}
+            </p>
           ) : (
             <Link href="/login" className="text-slate-300 underline">
               Admin login
@@ -94,34 +114,84 @@ export default async function Home() {
           )}
         </div>
 
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
-          {/* Quick Scorer - Mobile Friendly */}
-<Link
-  href="/scorer"
-  className="mt-5 flex items-center justify-between rounded-2xl bg-green-500 px-5 py-5 text-slate-950 shadow-lg transition active:scale-[0.98] hover:bg-green-400"
->
-  <div>
-    <div className="text-xl font-bold">
-      ⚡ Quick Scorer
-    </div>
-    <p className="mt-1 text-sm font-medium">
-      Tap to start scoring • Latest session
-    </p>
+        {/* Mobile-first: one-tap access to Sunday's most used tools. */}
+        <section className="mt-5 space-y-3">
+          <Link href="/scorer"
+            className="flex min-h-20 items-center justify-between gap-3 rounded-2xl bg-green-500 px-5 py-4 text-slate-950 shadow-lg active:scale-[0.99]">
+            <span><span className="block text-xl font-extrabold">⚡ Quick Scorer</span>
+              <span className="mt-1 block text-sm font-medium">Open latest session • Fast ball-by-ball scoring</span></span>
+            <span className="text-2xl">→</span>
+          </Link>
+          <Link href="/team-balancer"
+            className="flex min-h-20 items-center justify-between gap-3 rounded-2xl bg-blue-600 px-5 py-4 text-white shadow-lg active:scale-[0.99]">
+            <span><span className="block text-xl font-extrabold">⚖️ Auto Team Balancer</span>
+              <span className="mt-1 block text-sm text-blue-100">
+                {latestSession ? `${latestSession.session_date} • ${latestSession.session_name}` : "Choose a session"}
+              </span>
+              {latestSession && <span className="mt-1 block text-xs text-blue-100">
+                {latestTeamA + latestTeamB > 0
+                  ? `${latestSession.team_a_name || "Team A"}: ${latestTeamA} · ${latestSession.team_b_name || "Team B"}: ${latestTeamB}`
+                  : "Teams not assigned yet — tap to generate"}
+              </span>}
+            </span><span className="text-2xl">→</span>
+          </Link>
+          <div className="grid grid-cols-2 gap-3">
+            <Link href="/player-ratings" className="rounded-2xl bg-slate-900 px-4 py-4 text-sm font-bold">⭐ Player Ratings
+              <span className="mt-1 block text-xs font-normal text-slate-400">Edit or add players</span>
+            </Link>
+            <Link href="/team-history" className="rounded-2xl bg-slate-900 px-4 py-4 text-sm font-bold">📅 Team History
+              <span className="mt-1 block text-xs font-normal text-slate-400">Players by session date</span>
+            </Link>
+          </div>
+        </section>
+{/* Auto Team Balancer + Ratings/History: mobile shortcuts */}
+<section className="mt-4 space-y-3">
+  <Link href="/team-balancer"
+    className="flex min-h-20 items-center justify-between rounded-2xl bg-blue-600 px-5 py-4 text-white active:scale-[0.99]">
+    <span>
+      <span className="block text-xl font-extrabold">⚖️ Auto Team Balancer</span>
+      <span className="mt-1 block text-sm text-blue-100">
+        {recentSessions[0]
+          ? `Latest: ${recentSessions[0].session_date} — ${recentSessions[0].session_name}`
+          : "Choose a session"}
+      </span>
+    </span>
+    <span className="text-2xl">→</span>
+  </Link>
+  <div className="grid grid-cols-2 gap-3">
+    <Link href="/player-ratings"
+      className="rounded-2xl bg-slate-900 px-4 py-4 text-sm font-bold">
+      ⭐ Player Ratings
+      <span className="mt-1 block text-xs font-normal text-slate-400">Edit and add players</span>
+    </Link>
+    <Link href="/team-history"
+      className="rounded-2xl bg-slate-900 px-4 py-4 text-sm font-bold">
+      📅 Team History
+      <span className="mt-1 block text-xs font-normal text-slate-400">Teams by date</span>
+    </Link>
   </div>
-  <span className="text-3xl font-bold">→</span>
-</Link>
+</section>
+        <div className="mt-8 grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
           <DashboardLink href="/players" icon="👥" title="Players" />
           <DashboardLink href="/sessions" icon="📅" title="Sessions" />
           <DashboardLink href="/payments" icon="💰" title="Payments" />
 
           <DashboardLink
-            href={mainSession ? `/sessions/${mainSession.id}` : "/sessions"}
+            href={
+              mainSession
+                ? `/sessions/${mainSession.id}`
+                : "/sessions"
+            }
             icon="🏏"
             title="Matches"
           />
 
           <DashboardLink href="/videos" icon="📹" title="Videos" />
-          <DashboardLink href="/statistics" icon="📊" title="Statistics" />
+          <DashboardLink
+            href="/statistics"
+            icon="📊"
+            title="Statistics"
+          />
           <DashboardLink href="/captains" icon="👑" title="Captains" />
           <DashboardLink
             href="/ai-umpire-v2"
@@ -172,7 +242,8 @@ export default async function Home() {
 
                   <p className="mt-2 text-slate-300">
                     📅 {liveVotingSession.session_date} • 📍{" "}
-                    {liveVotingSession.turfs?.name || "Venue to be confirmed"}
+                    {liveVotingSession.turfs?.name ||
+                      "Venue to be confirmed"}
                   </p>
                 </div>
 
@@ -202,8 +273,12 @@ export default async function Home() {
                     }}
                   >
                     <div className="flex h-32 w-32 flex-col items-center justify-center rounded-full bg-slate-900">
-                      <span className="text-4xl font-black">{confirmedVotes}</span>
-                      <span className="text-sm text-slate-400">confirmed</span>
+                      <span className="text-4xl font-black">
+                        {confirmedVotes}
+                      </span>
+                      <span className="text-sm text-slate-400">
+                        confirmed
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -211,9 +286,11 @@ export default async function Home() {
                 <div>
                   <div className="flex items-end justify-between gap-4">
                     <div>
-                      <p className="text-sm text-slate-400">Voting Progress</p>
+                      <p className="text-sm text-slate-400">
+                        Voting Progress
+                      </p>
                       <p className="mt-1 text-3xl font-black">
-                        {confirmedVotes} / {totalActivePlayers}
+                        {confirmedVotes} / {activePlayerCount || 0}
                       </p>
                     </div>
 
@@ -230,8 +307,14 @@ export default async function Home() {
                   </div>
 
                   <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                    <MiniCard label="Confirmed" value={String(confirmedVotes)} />
-                    <MiniCard label="Waiting" value={String(waitingVotes)} />
+                    <MiniCard
+                      label="Confirmed"
+                      value={String(confirmedVotes)}
+                    />
+                    <MiniCard
+                      label="Waiting"
+                      value={String(waitingVotes)}
+                    />
                   </div>
                 </div>
               </div>
@@ -252,12 +335,16 @@ export default async function Home() {
                 </h2>
 
                 <p className="mt-2 text-slate-300">
-                  📅 {mainSession.session_date} • 📍 {mainSession.turfs?.name}
+                  📅 {mainSession.session_date} • 📍{" "}
+                  {mainSession.turfs?.name}
                 </p>
 
                 <p className="mt-1 text-slate-400">
-                  {mainSession.booking_type === "night" ? "🌙 Night" : "☀️ Day"} •{" "}
-                  {mainSession.hours_booked} hours • {mainSession.overs_per_match} overs
+                  {mainSession.booking_type === "night"
+                    ? "🌙 Night"
+                    : "☀️ Day"}{" "}
+                  • {mainSession.hours_booked} hours •{" "}
+                  {mainSession.overs_per_match} overs
                 </p>
               </div>
 
@@ -270,17 +357,38 @@ export default async function Home() {
             </div>
 
             <div className="mt-6 grid gap-4 md:grid-cols-5">
-              <Card label="Booking" value={`₹${booking.toFixed(2)}`} />
+              <Card
+                label="Booking"
+                value={`₹${booking.toFixed(2)}`}
+              />
               <Card label="Players" value={String(playerCount)} />
-              <Card label="Each Pays" value={`₹${perPlayer.toFixed(2)}`} />
-              <Card label="Collected" value={`₹${collected.toFixed(2)}`} />
-              <Card label="Pending" value={`₹${pending.toFixed(2)}`} />
+              <Card
+                label="Each Pays"
+                value={`₹${perPlayer.toFixed(2)}`}
+              />
+              <Card
+                label="Collected"
+                value={`₹${collected.toFixed(2)}`}
+              />
+              <Card
+                label="Pending"
+                value={`₹${pending.toFixed(2)}`}
+              />
             </div>
 
             <div className="mt-6 grid gap-4 md:grid-cols-3">
-              <MiniCard label="Captain / Team A" value={mainSession.captain_a || "-"} />
-              <MiniCard label="Captain / Team B" value={mainSession.captain_b || "-"} />
-              <MiniCard label="Matches Added" value={String(mainSession.matches?.length || 0)} />
+              <MiniCard
+                label="Captain / Team A"
+                value={mainSession.captain_a || "-"}
+              />
+              <MiniCard
+                label="Captain / Team B"
+                value={mainSession.captain_b || "-"}
+              />
+              <MiniCard
+                label="Matches Added"
+                value={String(mainSession.matches?.length || 0)}
+              />
             </div>
           </section>
         ) : (
@@ -311,15 +419,19 @@ export default async function Home() {
               >
                 <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <h3 className="font-bold">{session.session_name}</h3>
+                    <h3 className="font-bold">
+                      {session.session_name}
+                    </h3>
+
                     <p className="text-sm text-slate-400">
-                      {session.session_date} • {session.turfs?.name}
+                      {session.session_date} •{" "}
+                      {session.turfs?.name}
                     </p>
                   </div>
 
                   <div className="text-sm text-slate-300">
-                    👥 {session.session_players?.length || 0} players • 🏏{" "}
-                    {session.matches?.length || 0} matches
+                    👥 {session.session_players?.length || 0} players •
+                    🏏 {session.matches?.length || 0} matches
                   </div>
                 </div>
               </Link>
@@ -350,13 +462,21 @@ function DashboardLink({
       <div className="text-2xl">{icon}</div>
       <div className="mt-2 font-bold">{title}</div>
       {subtitle && (
-        <div className="mt-1 text-xs text-slate-400">{subtitle}</div>
+        <div className="mt-1 text-xs text-slate-400">
+          {subtitle}
+        </div>
       )}
     </Link>
   );
 }
 
-function Card({ label, value }: { label: string; value: string }) {
+function Card({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
   return (
     <div className="rounded-2xl bg-slate-800 p-4">
       <p className="text-sm text-slate-400">{label}</p>
@@ -365,7 +485,13 @@ function Card({ label, value }: { label: string; value: string }) {
   );
 }
 
-function MiniCard({ label, value }: { label: string; value: string }) {
+function MiniCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
   return (
     <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
       <p className="text-sm text-slate-400">{label}</p>
