@@ -234,7 +234,9 @@ export default function SessionDetailPage() {
 
 
 
-  const [selectedNewPlayerId, setSelectedNewPlayerId] = useState("");
+  const [selectedNewPlayerIds, setSelectedNewPlayerIds] = useState<string[]>([]);
+  const [playerSearch, setPlayerSearch] = useState("");
+  const [addingPlayers, setAddingPlayers] = useState(false);
 
 
 
@@ -760,122 +762,41 @@ export default function SessionDetailPage() {
 
 
 
-  async function addPlayerToSession() {
-
-
-
-    if (!selectedNewPlayerId) {
-
-
-
-      alert("Please select a player");
-
-
-
-      return;
-
-
-
-    }
-
-
-
-
-
-
-
-    const alreadyAdded = session.session_players?.some(
-
-
-
-      (row: SessionPlayer) => row.player_id === selectedNewPlayerId
-
-
-
+  async function addPlayersToSession() {
+    const existingIds = new Set(
+      (session.session_players || []).map((row: SessionPlayer) => row.player_id)
+    );
+    const playerIdsToAdd = selectedNewPlayerIds.filter(
+      (playerId) => !existingIds.has(playerId)
     );
 
-
-
-
-
-
-
-    if (alreadyAdded) {
-
-
-
-      alert("Player already added to this session");
-
-
-
+    if (playerIdsToAdd.length === 0) {
+      alert("Select at least one player who is not already in the session.");
       return;
-
-
-
     }
 
+    setAddingPlayers(true);
+    try {
+      const { error } = await supabase.from("session_players").insert(
+        playerIdsToAdd.map((playerId) => ({
+          session_id: id,
+          player_id: playerId,
+          amount_paid: 0,
+          payment_method: null,
+        }))
+      );
 
+      if (error) {
+        alert(`Could not add players: ${error.message}`);
+        return;
+      }
 
-
-
-
-
-    const { error } = await supabase.from("session_players").insert({
-
-
-
-      session_id: id,
-
-
-
-      player_id: selectedNewPlayerId,
-
-
-
-      amount_paid: 0,
-
-
-
-      payment_method: null,
-
-
-
-    });
-
-
-
-
-
-
-
-    if (error) {
-
-
-
-      alert(error.message);
-
-
-
-      return;
-
-
-
+      setSelectedNewPlayerIds([]);
+      setPlayerSearch("");
+      await loadSession();
+    } finally {
+      setAddingPlayers(false);
     }
-
-
-
-
-
-
-
-    setSelectedNewPlayerId("");
-
-
-
-    loadSession();
-
-
-
   }
 
 
@@ -1604,6 +1525,19 @@ export default function SessionDetailPage() {
 
   );
 
+  const filteredAvailablePlayers = availablePlayers.filter((player) =>
+    player.name.toLowerCase().includes(playerSearch.trim().toLowerCase())
+  );
+
+  function togglePlayerSelection(playerId: string) {
+    setSelectedNewPlayerIds((current) =>
+      current.includes(playerId)
+        ? current.filter((id) => id !== playerId)
+        : [...current, playerId]
+    );
+  }
+
+
 
 
 
@@ -1738,93 +1672,89 @@ export default function SessionDetailPage() {
 
 
 
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="mt-4 rounded-xl border border-slate-700 bg-slate-800/70 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="font-semibold">Select multiple players</p>
+              <span className="text-sm text-green-300">
+                {selectedNewPlayerIds.length} selected
+              </span>
+            </div>
 
+            <input
+              type="search"
+              value={playerSearch}
+              onChange={(event) => setPlayerSearch(event.target.value)}
+              placeholder="Search player by name..."
+              aria-label="Search players to add"
+              className="mt-3 w-full rounded-xl border border-slate-600 bg-slate-900 p-3 text-white placeholder:text-slate-400"
+            />
 
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedNewPlayerIds((current) => [
+                    ...new Set([
+                      ...current,
+                      ...filteredAvailablePlayers.map((player) => player.id),
+                    ]),
+                  ])
+                }
+                disabled={addingPlayers || filteredAvailablePlayers.length === 0}
+                className="rounded-lg border border-slate-500 px-3 py-2 text-sm disabled:opacity-50"
+              >
+                Select All {playerSearch.trim() ? "Results" : "Available"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedNewPlayerIds([])}
+                disabled={addingPlayers || selectedNewPlayerIds.length === 0}
+                className="rounded-lg border border-slate-500 px-3 py-2 text-sm disabled:opacity-50"
+              >
+                Clear Selection
+              </button>
+            </div>
 
-            <select
-
-
-
-              value={selectedNewPlayerId}
-
-
-
-              onChange={(e) => setSelectedNewPlayerId(e.target.value)}
-
-
-
-              className="rounded-xl border border-slate-700 bg-slate-800 p-3"
-
-
-
-            >
-
-
-
-              <option value="">Select player to add</option>
-
-
-
-              {availablePlayers.map((player) => (
-
-
-
-                <option key={player.id} value={player.id}>
-
-
-
-                  {player.name}
-
-
-
-                </option>
-
-
-
+            <div className="mt-3 grid max-h-64 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
+              {filteredAvailablePlayers.map((player) => (
+                <label
+                  key={player.id}
+                  className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm ${
+                    selectedNewPlayerIds.includes(player.id)
+                      ? "border-green-500 bg-green-500/10"
+                      : "border-slate-700 bg-slate-900"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedNewPlayerIds.includes(player.id)}
+                    onChange={() => togglePlayerSelection(player.id)}
+                    disabled={addingPlayers}
+                    className="h-5 w-5 accent-green-500"
+                  />
+                  <span>{player.name}</span>
+                </label>
               ))}
-
-
-
-            </select>
-
-
-
-
-
-
+              {filteredAvailablePlayers.length === 0 && (
+                <p className="py-3 text-sm text-slate-400">
+                  {availablePlayers.length === 0
+                    ? "All active players are already in this session."
+                    : "No players match your search."}
+                </p>
+              )}
+            </div>
 
             <button
-
-
-
-              onClick={addPlayerToSession}
-
-
-
-              className="rounded-xl bg-green-500 px-5 py-3 font-semibold text-slate-950"
-
-
-
+              type="button"
+              onClick={addPlayersToSession}
+              disabled={addingPlayers || selectedNewPlayerIds.length === 0}
+              className="mt-4 w-full rounded-xl bg-green-500 px-5 py-3 font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
             >
-
-
-
-              Add Player to Session
-
-
-
+              {addingPlayers
+                ? "Adding players..."
+                : `Add ${selectedNewPlayerIds.length} Player${selectedNewPlayerIds.length === 1 ? "" : "s"} to Session`}
             </button>
-
-
-
           </div>
-
-
-
-
-
-
 
           <div className="mt-5 grid gap-3 md:grid-cols-3">
 
