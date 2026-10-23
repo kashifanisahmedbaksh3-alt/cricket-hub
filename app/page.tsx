@@ -95,6 +95,21 @@ export default async function Home() {
         </div>
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+          {/* Quick Scorer - Mobile Friendly */}
+<Link
+  href="/scorer"
+  className="mt-5 flex items-center justify-between rounded-2xl bg-green-500 px-5 py-5 text-slate-950 shadow-lg transition active:scale-[0.98] hover:bg-green-400"
+>
+  <div>
+    <div className="text-xl font-bold">
+      ⚡ Quick Scorer
+    </div>
+    <p className="mt-1 text-sm font-medium">
+      Tap to start scoring • Latest session
+    </p>
+  </div>
+  <span className="text-3xl font-bold">→</span>
+</Link>
           <DashboardLink href="/players" icon="👥" title="Players" />
           <DashboardLink href="/sessions" icon="📅" title="Sessions" />
           <DashboardLink href="/payments" icon="💰" title="Payments" />
