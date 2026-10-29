@@ -27,9 +27,9 @@ export default function QuickScorer({match, sessionPlayers, teamAssignments = []
   const [bowler,setBowler]=useState("");
   const [striker,setStriker]=useState("Player 1");
   const [nonStriker,setNonStriker]=useState("Player 2");
-  const [guest,setGuest]=useState("");
   const [guests,setGuests]=useState<string[]>([]);
-  const [extra,setExtra]=useState<"wide"|"no_ball"|null>(null);
+  const [manualBowler,setManualBowler]=useState("");
+  const [showManualBowler,setShowManualBowler]=useState(false);
   const [inningsOneEnded,setInningsOneEnded]=useState(match.current_innings === 2);
   const [finished,setFinished]=useState(match.match_status === "completed");
   const [overReport,setOverReport]=useState("");
@@ -92,16 +92,23 @@ export default function QuickScorer({match, sessionPlayers, teamAssignments = []
   const second=balls.filter(b=>b.innings===2);
   const battingSide:Side=innings===1?firstSide:firstSide==="A"?"B":"A";
   const bowlingSide:Side=battingSide==="A"?"B":"A";
-  const bowlerOptions = useMemo(() => {
-    // Show players assigned to the bowling side plus unassigned session players.
-    // If no teams are assigned, show every player in this session.
-    const sideById = new Map(teamAssignments.map(a => [a.player_id, a.team_side]));
-    const candidates = teamAssignments.length
-      ? sessionPlayers.filter(p => !sideById.has(p.player_id) || sideById.get(p.player_id) === bowlingSide)
-      : sessionPlayers;
-    const available = candidates.map(p => p.players?.name?.trim() || "").filter(Boolean);
-    // Always allow manual/guest bowler names, including the currently selected bowler.
-    return Array.from(new Set([...available, ...guests, ...(bowler ? [bowler] : [])])).sort();
+  const bowlingGroups = useMemo(() => {
+    const assignments = new Map(teamAssignments.map(a => [a.player_id, a.team_side]));
+    const assigned: string[] = [];
+    const unassigned: string[] = [];
+    for (const entry of sessionPlayers) {
+      const name = entry.players?.name?.trim();
+      if (!name) continue;
+      const side = assignments.get(entry.player_id);
+      if (side === bowlingSide) assigned.push(name);
+      else if (!side) unassigned.push(name);
+      // Players assigned to the batting side are intentionally excluded.
+    }
+    const unique = (values: string[]) => Array.from(new Set(values)).sort((a,b) => a.localeCompare(b));
+    const manual = unique([...guests, ...(bowler ? [bowler] : [])].filter(n =>
+      !assigned.includes(n) && !unassigned.includes(n)
+    ));
+    return { assigned: unique(assigned), unassigned: unique(unassigned), manual };
   }, [sessionPlayers, teamAssignments, bowlingSide, guests, bowler]);
   const team=(side:Side)=>side==="A"?(match.team_a||"Team A"):(match.team_b||"Team B");
   const score=total(current);
@@ -110,64 +117,54 @@ export default function QuickScorer({match, sessionPlayers, teamAssignments = []
   const target=total(first)+1;
   const reached=innings===2&&score>=target;
   const inningsLimit=legalBalls>=limit;
-    async function saveBall(runs:number,wicket=false){
-    if(!isAdmin||busy||finished||inningsLimit||reached||inningsOneEnded&&innings===1)return;
-    if(!bowler.trim()){alert("Select the bowler once for this over.");return;}
+  async function saveBall(runs:number, kind:"normal"|"wide"|"no_ball"="normal", wicket=false){
+    if(!isAdmin||busy||finished||inningsLimit||reached||(inningsOneEnded&&innings===1))return;
+    if(!bowler.trim()){setError("Select a bowler before recording the next delivery.");return;}
     if(!striker.trim()||!nonStriker.trim()||striker===nonStriker){
-      alert("Striker and non-striker must be different. Use Player 1 and Player 2 if names are unknown.");return;
+      setError("Striker and non-striker must differ. Player 1 and Player 2 work without real names.");return;
     }
-    if(extra&&wicket){alert("Record wicket separately; wicket on extras needs a special dismissal type.");return;}
-    // Normal: chosen runs are off the bat and the ball is legal.
-    // Wide: the first run is the wide penalty, and chosen runs are additional
-    // wides/runs taken. All are extras and the delivery is NOT legal.
-    // No-ball: one penalty extra plus chosen bat runs; NOT a legal delivery.
+    if(kind!=="normal" && wicket)return;
+    // A wide is 1 penalty + additional wide runs; a no-ball is 1 penalty + bat runs.
+    // Neither consumes one of the six legal deliveries.
     const row={
-      match_id:match.id,
-      innings,
+      match_id:match.id, innings,
       ball_index:(balls.at(-1)?.ball_index||0)+1,
-      bowler_name:bowler.trim(),
-      striker_name:striker.trim(),
-      non_striker_name:nonStriker.trim(),
-      runs_bat:extra==="wide"?0:runs,
-      extra_type:extra,
-      extra_runs:extra?extra==="wide"?1+runs:1:0,
+      bowler_name:bowler.trim(), striker_name:striker.trim(), non_striker_name:nonStriker.trim(),
+      runs_bat:kind==="wide"?0:runs,
+      extra_type:kind==="normal"?null:kind,
+      extra_runs:kind==="normal"?0:1+(kind==="wide"?runs:0),
       wicket,
     };
-    setBusy(true);
-    const {error:e}=await supabase.from("match_quick_balls").insert(row);
-    if(e){alert(e.message);setBusy(false);return;}
-    const next=[...current,{...row,id:"temp",created_at:""} as Ball];
-    const side=battingSide;
-    const update:any={match_status:"in_progress",current_innings:innings,batting_first_side:firstSide,batting_first_team:team(firstSide)};
-    update[side==="A"?"team_a_runs":"team_b_runs"]=total(next);
-    update[side==="A"?"team_a_wickets":"team_b_wickets"]=wickets(next);
+    setError("");setBusy(true);
+    // Get the inserted row instead of re-fetching every ball. This makes the UI much faster.
+    const {data:inserted,error:e}=await supabase.from("match_quick_balls").insert(row).select("*").single();
+    if(e||!inserted){setError(e?.message||"Could not save the delivery. Try again.");setBusy(false);return;}
+    const saved=inserted as Ball;
+    const next=[...current,saved];
+    setBalls(previous=>[...previous,saved]);
+    const update:Record<string,unknown>={match_status:"in_progress",current_innings:innings,
+      batting_first_side:firstSide,batting_first_team:team(firstSide)};
+    update[battingSide==="A"?"team_a_runs":"team_b_runs"]=total(next);
+    update[battingSide==="A"?"team_a_wickets":"team_b_wickets"]=wickets(next);
     const {error:scoreError}=await supabase.from("matches").update(update).eq("id",match.id);
-    if(scoreError) {
-      setError(`Delivery recorded, but updating match total failed: ${scoreError.message}`);
-    }
-    const overJustCompleted=!extra && legal(next)%6===0;
-    let notice="";
-    if(overJustCompleted){
-      const last=next.slice().reverse();
-      let legalCount=0;
-      const over:Ball[]=[];
-      for(const b of last){
-        over.unshift(b);
-        if(!b.extra_type)legalCount++;
-        if(legalCount===6)break;
-      }
+    if(scoreError)setError(`Ball saved, but match total did not update: ${scoreError.message}`);
+    const overComplete=kind==="normal"&&legal(next)%6===0;
+    if(overComplete){
+      // Include wides/no-balls at the start of the over, before its first legal ball.
+      const priorLegalBalls = legal(next) - 6;
+      let seenLegalBalls = 0;
+      const over = next.filter(b => {
+        const beforeThisBall = seenLegalBalls;
+        if (!b.extra_type) seenLegalBalls += 1;
+        return beforeThisBall >= priorLegalBalls;
+      });
       const overNo=legal(next)/6;
-      const lastOver=legal(next)>=limit;
-      notice=`Over ${overNo} complete! ${total(over)} runs, ${wickets(over)} wicket(s). ${lastOver?"Innings overs finished — end the innings.":"Change the bowler for the next over."}`;
-      setOverReport(notice);
+      const end=legal(next)>=limit;
+      setOverReport(`Over ${overNo} complete · ${total(over)} runs · ${wickets(over)} wicket(s). ${end?"End the innings.":"Select the next bowler."}`);
       setBowler("");
-    }
-    // Return to normal scoring after each wide / no-ball.
-    setExtra(null);
-    await refresh();
-    await onChanged?.();
+    } else setOverReport("");
+    // Do not call the parent's session reload after each delivery: it causes slow taps.
     setBusy(false);
-    if(notice) alert(notice);
   }
   async function undo(){if(!isAdmin||busy||!balls.length||finished)return;const last=balls.at(-1)!;if(!confirm("Undo last delivery?"))return;setBusy(true);const {error:e}=await supabase.from("match_quick_balls").delete().eq("id",last.id);if(e){alert(e.message);setBusy(false);return;}const remaining=balls.filter(b=>b.id!==last.id).filter(b=>b.innings===last.innings);const side=last.innings===1?firstSide:firstSide==="A"?"B":"A";await supabase.from("matches").update({[side==="A"?"team_a_runs":"team_b_runs"]:total(remaining),[side==="A"?"team_a_wickets":"team_b_wickets"]:wickets(remaining)}).eq("id",match.id);setOverReport("");await refresh();await onChanged?.();setBusy(false);}
   async function endInnings(){if(!isAdmin||busy||finished)return;if(innings===1){if(!current.length){alert("Record at least one ball first.");return;}if(!confirm(`End first innings at ${score}/${wickets(current)}?`))return;setInningsOneEnded(true);setInnings(2);setBowler("");setStriker("Player 1");setNonStriker("Player 2");setOverReport("");const {error:e}=await supabase.from("matches").update({current_innings:2,target_runs:target,batting_first_side:firstSide,batting_first_team:team(firstSide),match_status:"in_progress"}).eq("id",match.id);if(e)alert(e.message);await onChanged?.();}else await finishMatch();}
@@ -175,82 +172,148 @@ export default function QuickScorer({match, sessionPlayers, teamAssignments = []
     if(!confirm(`Finish match? ${team(firstSide)} ${firstScore}, ${team(firstSide==="A"?"B":"A")} ${secondScore}. Result: ${result}`))return;
     setBusy(true);const {error:e}=await supabase.from("matches").update({winner,match_status:"completed",result_text:result,completed_at:new Date().toISOString(),current_innings:2,target_runs:firstScore+1,batting_first_side:firstSide,batting_first_team:team(firstSide)}).eq("id",match.id);if(e)alert(e.message);else{setFinished(true);await onChanged?.();}setBusy(false);
   }
-  function addGuest(){const n=guest.trim();if(!n)return;setGuests(v=>v.includes(n)?v:[...v,n]);setGuest("");}
+  function useManualBowler(){
+    const name=manualBowler.trim();
+    if(!name)return;
+    setGuests(v=>v.includes(name)?v:[...v,name]);
+    setBowler(name);
+    setManualBowler("");
+    setShowManualBowler(false);
+    setError("");
+  }
   const bowlingSummary=useMemo(()=>{const m=new Map<string,{runs:number;wickets:number;balls:number}>();for(const b of current){const x=m.get(b.bowler_name)||{runs:0,wickets:0,balls:0};x.runs+=b.runs_bat+b.extra_runs;x.wickets+=Number(b.wicket);x.balls+=Number(!b.extra_type);m.set(b.bowler_name,x);}return [...m.entries()];},[current]);
-  return <section className="mt-5 rounded-2xl border border-cyan-700 bg-slate-950 p-4 text-white sm:p-6">
-    <h4 className="text-xl font-black">⚡ Quick Scorer — Match {match.match_number}</h4>
-    <p className="mt-1 text-sm text-slate-400">One tap per ball • Automatic Player 1 / Player 2 • Names optional</p>
-    {error&&<p className="mt-3 rounded bg-red-900 p-3 text-red-200">{error} — Run the supplied SQL setup first.</p>}
-    <div className="mt-4 flex flex-wrap items-center gap-3">
-      <span className="rounded-lg bg-blue-900 px-3 py-2 font-bold">{team("A")}</span><span>VS</span><span className="rounded-lg bg-red-900 px-3 py-2 font-bold">{team("B")}</span>
-      {finished&&<span className="rounded bg-green-800 px-3 py-2">Completed</span>}
-    </div>
-    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-      <div className="rounded-xl bg-slate-900 p-4"><p className="text-sm text-slate-400">1st innings · {team(firstSide)}</p><p className="text-3xl font-black">{total(first)}/{wickets(first)}</p><p>{overs(first)} overs</p></div>
-      <div className="rounded-xl bg-slate-900 p-4"><p className="text-sm text-slate-400">2nd innings · {team(firstSide==="A"?"B":"A")}</p><p className="text-3xl font-black">{total(second)}/{wickets(second)}</p><p>{overs(second)} overs {innings===2&&`· Target ${target}`}</p></div>
-    </div>
-    {balls.length===0&&<label className="mt-4 block text-sm">Batting first <select className={`${cls} ml-2`} value={firstSide} onChange={e=>setFirstSide(e.target.value as Side)} disabled={!isAdmin}><option value="A">{team("A")}</option><option value="B">{team("B")}</option></select></label>}
-    <div className="mt-4 rounded-xl bg-slate-900 p-4"><p className="font-bold">Innings {innings} · Batting: {team(battingSide)} · Bowling: {team(bowlingSide)}</p><p className="mt-1 text-2xl font-black">{score}/{wickets(current)} <span className="text-base font-normal">({overs(current)} / {match.overs||7} overs)</span></p>{reached&&<p className="text-green-300">Target reached — finish the match.</p>}{inningsLimit&&<p className="text-yellow-300">Over limit reached — end innings.</p>}</div>
-    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-      <label className="text-sm sm:col-span-2">Bowler · select once per over
-        <select className={`mt-1 block w-full ${cls}`} value={bowler} onChange={e=>setBowler(e.target.value)} disabled={!isAdmin||finished}>
-          <option value="">{legalBalls > 0 && legalBalls % 6 === 0 ? "Select bowler for next over" : "Select bowler"}</option>
-          {playerSelectOptions(bowlerOptions)}
+  const disabledScoring=!isAdmin||busy||finished||!bowler||inningsLimit||reached||(inningsOneEnded&&innings===1);
+  const keyButton="min-h-14 touch-manipulation select-none rounded-xl px-2 py-3 text-xl font-extrabold shadow-sm active:scale-[0.97] disabled:opacity-40";
+  return <section className="mt-3 rounded-2xl border border-cyan-700 bg-slate-950 p-3 text-white sm:p-6">
+    <header className="sticky top-0 z-20 -mx-3 border-b border-slate-800 bg-slate-950/95 px-3 py-2 backdrop-blur sm:-mx-6 sm:px-6">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-xs text-slate-400">⚡ Match {match.match_number} · Innings {innings} · {team(battingSide)} batting</p>
+          <p className="text-2xl font-black tabular-nums">{score}/{wickets(current)} <span className="text-sm font-medium text-slate-300">({overs(current)} / {match.overs||7})</span></p>
+        </div>
+        <div className="shrink-0 text-right text-xs text-slate-300">
+          <p>{team(bowlingSide)} bowling</p>
+          {innings===2&&<p className="font-bold text-green-300">Target {target}</p>}
+          {busy&&<p role="status" className="text-amber-300">Saving…</p>}
+        </div>
+      </div>
+    </header>
+
+    {error&&<p role="alert" className="mt-3 rounded-xl border border-red-600 bg-red-950 p-3 text-sm text-red-100">{error}</p>}
+    {finished&&<p className="mt-3 rounded-xl bg-green-950 p-3 font-bold">Match completed</p>}
+    {balls.length===0&&<label className="mt-3 block text-sm font-semibold">Batting first
+      <select className={`mt-1 block w-full ${cls}`} value={firstSide} onChange={e=>setFirstSide(e.target.value as Side)} disabled={!isAdmin}>
+        <option value="A">{team("A")}</option><option value="B">{team("B")}</option>
+      </select>
+    </label>}
+
+    <div className="mt-3">
+      <label htmlFor={`bowler-${match.id}`} className="block text-sm font-bold">🎯 Bowler <span className="font-normal text-slate-400">(select once for 6 legal balls)</span></label>
+      <div className="mt-1 flex gap-2">
+        <select id={`bowler-${match.id}`} className={`min-w-0 flex-1 ${cls}`} value={bowler}
+          onChange={e=>{setBowler(e.target.value);setError("");}}
+          disabled={!isAdmin||finished}>
+          <option value="">Select bowler</option>
+          {bowlingGroups.assigned.length > 0 &&
+            <optgroup label={`${team(bowlingSide)} — bowling team`}>
+              {playerSelectOptions(bowlingGroups.assigned)}
+            </optgroup>}
+          {bowlingGroups.unassigned.length > 0 &&
+            <optgroup label={bowlingGroups.assigned.length ? "Not assigned to a team" : "Session players"}>
+              {playerSelectOptions(bowlingGroups.unassigned)}
+            </optgroup>}
+          {bowlingGroups.manual.length > 0 &&
+            <optgroup label="Manually entered bowlers">
+              {playerSelectOptions(bowlingGroups.manual)}
+            </optgroup>}
         </select>
-        <span className="mt-1 block text-xs text-green-300">{bowler ? `${bowler} stays selected for this over. Just tap runs for each ball.` : "Choose a bowler, then tap runs for every delivery."}</span>
-      </label>
+        <button type="button" className="shrink-0 rounded-xl bg-slate-700 px-3 py-2 text-sm font-bold active:bg-slate-600"
+          onClick={()=>setShowManualBowler(v=>!v)} disabled={!isAdmin||finished}>
+          {showManualBowler?"Cancel":"+ Name"}
+        </button>
+      </div>
+      {showManualBowler&&<div className="mt-2 flex gap-2">
+        <input aria-label="Manual bowler name" autoFocus className={`min-w-0 flex-1 ${cls}`}
+          value={manualBowler} onChange={e=>setManualBowler(e.target.value)}
+          onKeyDown={e=>{if(e.key==="Enter")useManualBowler();}} placeholder="Enter bowler name" />
+        <button type="button" className="rounded-xl bg-green-600 px-4 font-bold" onClick={useManualBowler}>Use</button>
+      </div>}
+      <p className="mt-1 text-xs text-green-300">{bowler
+        ? `${bowler} stays selected until the over completes.`
+        : bowlingGroups.assigned.length
+          ? `Showing ${team(bowlingSide)} bowlers first; unassigned session players also available.`
+          : `Choose from this session${teamAssignments.length ? " (unassigned players)" : ""}, or tap + Name.`}</p>
     </div>
-    <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl bg-slate-900 p-3">
-      <label className="min-w-0 text-sm font-semibold text-slate-200">🏏 Striker
-        <select className={`mt-2 block w-full ${cls}`} value={striker} onChange={e=>setStriker(e.target.value)} disabled={!isAdmin||finished}>
-          {playerSelectOptions(battingChoices)}
-        </select>
-      </label>
-      <label className="min-w-0 text-sm font-semibold text-slate-200">Non-striker
-        <select className={`mt-2 block w-full ${cls}`} value={nonStriker} onChange={e=>setNonStriker(e.target.value)} disabled={!isAdmin||finished}>
-          {playerSelectOptions(battingChoices)}
-        </select>
-      </label>
-      <p className="col-span-2 text-xs text-green-300">Defaults: Player 1 & Player 2. Odd runs swap strike; over end swaps ends. Wicket brings Player 3, then Player 4. Choose real names anytime.</p>
-    </div>
-    <div className="mt-3 flex gap-2"><input className={`min-w-0 flex-1 ${cls}`} value={guest} onChange={e=>setGuest(e.target.value)} placeholder="Guest / replacement captain / player name" disabled={!isAdmin}/><button className={btn} onClick={addGuest} disabled={!isAdmin}>Add name</button></div>
-    <p className="mt-2 text-xs text-slate-400">Session captains: {captainA||team("A")} / {captainB||team("B")}. For a replacement, enter the name above and select them as batter or bowler. Session captain records stay unchanged.</p>
+
+    <details className="mt-3 rounded-xl bg-slate-900 px-3 py-2">
+      <summary className="cursor-pointer text-sm font-semibold">🏏 Batters (optional): {striker} / {nonStriker}</summary>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <label className="min-w-0 text-xs">Striker
+          <select className={`mt-1 w-full ${cls}`} value={striker} onChange={e=>setStriker(e.target.value)} disabled={!isAdmin||finished}>{playerSelectOptions(battingChoices)}</select>
+        </label>
+        <label className="min-w-0 text-xs">Non-striker
+          <select className={`mt-1 w-full ${cls}`} value={nonStriker} onChange={e=>setNonStriker(e.target.value)} disabled={!isAdmin||finished}>{playerSelectOptions(battingChoices)}</select>
+        </label>
+      </div>
+      <p className="mt-2 text-xs text-slate-400">Player 1 and 2 work automatically; names are optional. Odd runs and over end change strike.</p>
+    </details>
+
     {!finished&&<>
-      <div className="mt-5 grid grid-cols-3 gap-2" role="group" aria-label="Delivery type">
+      <div className="mt-3 grid grid-cols-4 gap-2" aria-label="One-tap cricket scoring">
+        {[0, 1, 2, 3, 4, 6].map(n =>
+          <button type="button" key={`runs-${n}`}
+            className={`${keyButton} bg-slate-700`} disabled={disabledScoring}
+            onClick={() => saveBall(n)}>{n}</button>
+        )}
+        <button type="button" className={`${keyButton} bg-rose-800 text-base`} disabled={disabledScoring}
+          onClick={() => saveBall(0, "normal", true)}>W</button>
+        <button type="button" className={`${keyButton} bg-slate-700 text-base`} disabled={!isAdmin || busy || !balls.length || finished}
+          onClick={undo}>↶ Undo</button>
+      </div>
+
+      <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Extras — directly tap the correct result</p>
+      <div className="mt-2 grid grid-cols-4 gap-2" aria-label="One-tap extras scoring">
         {([
-          {kind:null,label:"Normal"},
-          {kind:"wide" as const,label:"Wide"},
-          {kind:"no_ball" as const,label:"No-ball"},
-        ]).map(({kind,label})=><button
-          type="button"
-          key={label}
-          aria-pressed={extra===kind}
-          className={`${btn} ${extra===kind?"bg-cyan-600 ring-2 ring-cyan-300":"bg-slate-700"} text-sm sm:text-base`}
-          onClick={()=>setExtra(kind)}
-          disabled={!isAdmin||busy||inningsLimit||reached}
-        >{label}</button>)}
+          {label:"WD", kind:"wide", add:0, total:1},
+          {label:"WD+1", kind:"wide", add:1, total:2},
+          {label:"WD+2", kind:"wide", add:2, total:3},
+          {label:"WD+4", kind:"wide", add:4, total:5},
+          {label:"NB", kind:"no_ball", add:0, total:1},
+          {label:"NB+1", kind:"no_ball", add:1, total:2},
+          {label:"NB+2", kind:"no_ball", add:2, total:3},
+          {label:"NB+4", kind:"no_ball", add:4, total:5},
+        ] as const).map(item =>
+          <button type="button" key={item.label}
+            className={`${keyButton} ${item.kind === "wide" ? "bg-amber-800" : "bg-orange-800"} flex flex-col items-center justify-center gap-0.5`}
+            disabled={disabledScoring} onClick={() => saveBall(item.add, item.kind)}>
+            <span className="text-base leading-tight">{item.label}</span>
+            <span className="text-[10px] font-medium leading-tight text-amber-100">{`+${item.total} run${item.total === 1 ? "" : "s"}`}</span>
+          </button>
+        )}
       </div>
-      <p className="mt-2 text-sm text-slate-300">
-        {extra==="wide"
-          ? "Wide = 1 run automatically. Tap 0 for a normal wide, or 1/2/4 for additional runs. None of these deliveries counts as a legal ball."
-          : extra==="no_ball"
-          ? "No-ball = 1 extra run automatically. Tap runs hit by the batter (0/1/2/3/4/6). This delivery does not count as a legal ball."
-          : "Normal ball: tap runs scored, or WICKET. Each tap counts as one legal ball."}
-      </p>
-      <div className="mt-3 grid grid-cols-4 gap-2">
-        {[0,1,2,3,4,6].map(n=><button key={n} type="button" className={`${btn} bg-cyan-800 text-xl`} disabled={!isAdmin||busy||!bowler||inningsLimit||reached} onClick={()=>saveBall(n)}>
-          {extra===null?String(n):String(n+1)}
-          {extra&&<span className="mt-0.5 block text-xs font-normal">{extra==="wide"?n===0?"WD":"wide + "+n:n===0?"NB":"NB + bat "+n}</span>}
-        </button>)}
-        <button type="button" className={`${btn} col-span-2 bg-red-800`} disabled={!isAdmin||busy||!bowler||!!extra||inningsLimit||reached} onClick={()=>saveBall(0,true)}>WICKET</button>
+      <details className="mt-2 rounded-xl bg-slate-900 px-3 py-2">
+        <summary className="cursor-pointer text-xs text-slate-300">Less common extras (WD+3, NB+3, NB+6)</summary>
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          <button type="button" className={`${keyButton} bg-amber-800 text-sm`} disabled={disabledScoring} onClick={() => saveBall(3,"wide")}>WD+3</button>
+          <button type="button" className={`${keyButton} bg-orange-800 text-sm`} disabled={disabledScoring} onClick={() => saveBall(3,"no_ball")}>NB+3</button>
+          <button type="button" className={`${keyButton} bg-orange-800 text-sm`} disabled={disabledScoring} onClick={() => saveBall(6,"no_ball")}>NB+6</button>
+        </div>
+      </details>
+      <p className="mt-2 text-xs text-slate-400">WD/NB give 1 penalty run automatically; + runs are additional. Wides and no-balls do not increase the legal-ball count.</p>
+      {overReport&&<p role="status" className="mt-3 rounded-xl border border-green-500 bg-green-950 p-3 text-sm font-bold text-green-200">✅ {overReport}</p>}
+      {reached&&<p className="mt-2 font-bold text-green-300">Target reached — finish the match.</p>}
+      {inningsLimit&&<p className="mt-2 font-bold text-amber-300">Over limit reached — end innings.</p>}
+      <div className="mt-3 flex gap-2">
+        <button type="button" className="flex-1 rounded-xl bg-amber-700 px-4 py-3 font-bold disabled:opacity-40"
+          disabled={!isAdmin||busy||!current.length} onClick={endInnings}>{innings===1?"End 1st Innings":"Finish Match"}</button>
       </div>
-      {legalBalls>0 && legalBalls%6===0 && !inningsLimit && <p role="status" className="mt-3 rounded-xl border border-green-600 bg-green-950 p-3 font-bold text-green-200">✅ Over {legalBalls/6} complete — change the bowler to continue.</p>}
-      <div className="mt-3 flex flex-wrap gap-2"><button className={btn} disabled={!isAdmin||busy||!balls.length} onClick={undo}>↶ Undo last ball</button><button className={`${btn} bg-amber-700`} disabled={!isAdmin||busy||!current.length} onClick={endInnings}>{innings===1?"End 1st Innings":"Finish Match"}</button></div>
     </>}
-    {overReport&&<p className="mt-4 rounded-xl bg-green-950 p-3 font-bold">{overReport}</p>}
-    <h5 className="mt-5 font-bold">Bowling summary — innings {innings}</h5>
-    <div className="mt-2 space-y-2">{bowlingSummary.map(([name,v])=><div key={name} className="flex justify-between rounded bg-slate-900 p-3"><span>{name}</span><span>{Math.floor(v.balls/6)}.{v.balls%6} overs · {v.runs} runs · {v.wickets} wickets</span></div>)}{!bowlingSummary.length&&<p className="text-sm text-slate-400">No deliveries yet.</p>}</div>
-    <p className="mt-4 text-sm text-slate-400">Last deliveries: {current.slice(-12).map(b=>`${b.wicket?"W":b.runs_bat+b.extra_runs}${b.extra_type?` ${b.extra_type}`:""}`).join(" · ")||"—"}</p>
-    <p className="mt-3 text-xs text-amber-300">Quick mode: strike changes automatically on odd runs and over completion. WICKET assumes the striker is out. Run-outs, byes, leg-byes and other dismissal types are not yet supported.</p>
+
+    <details className="mt-4 rounded-xl bg-slate-900 px-3 py-3">
+      <summary className="cursor-pointer text-sm font-bold">Bowling summary · innings {innings}</summary>
+      <div className="mt-3 space-y-2">{bowlingSummary.map(([name,v])=><div key={name} className="flex items-center justify-between gap-2 border-b border-slate-700 pb-2 text-sm"><span>{name}</span><span className="shrink-0 text-right">{Math.floor(v.balls/6)}.{v.balls%6} ov · {v.runs} runs · {v.wickets} W</span></div>)}{!bowlingSummary.length&&<p className="text-xs text-slate-400">No deliveries yet.</p>}</div>
+      <p className="mt-3 text-xs text-slate-400">Last balls: {current.slice(-12).map(b=>`${b.wicket?"W":b.runs_bat+b.extra_runs}${b.extra_type?` ${b.extra_type==="wide"?"WD":"NB"}`:""}`).join(" · ")||"—"}</p>
+    </details>
+    <p className="mt-3 text-xs text-slate-500">W assumes striker out. Run-outs, byes and leg-byes are not yet supported.</p>
   </section>;
 }
