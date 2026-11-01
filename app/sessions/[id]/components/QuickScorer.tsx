@@ -33,15 +33,7 @@ export default function QuickScorer({match, sessionPlayers, teamAssignments = []
   const [inningsOneEnded,setInningsOneEnded]=useState(match.current_innings === 2);
   const [finished,setFinished]=useState(match.match_status === "completed");
   const [overReport,setOverReport]=useState("");
-  const names=useMemo(()=>Array.from(new Set([
-    ...sessionPlayers.map(p=>p.players?.name?.trim()||"").filter(Boolean),
-    ...guests
-  ])).sort(),[sessionPlayers,guests]);
-  const battingChoices = useMemo(() => {
-    // Keep generic labels available for fast play, even without named batters.
-    const slots = Array.from({length: 12}, (_,i) => `Player ${i+1}`);
-    return Array.from(new Set([...slots,...names,striker,nonStriker].filter(Boolean)));
-  },[names,striker,nonStriker]);
+  // Batters are tracked anonymously for score-history compatibility. No batter selection is shown.
   const refresh=useCallback(async()=>{
     const {data,error:e}=await supabase.from("match_quick_balls").select("*").eq("match_id",match.id).order("ball_index",{ascending:true});
     if(e) setError(e.message); else {setBalls((data||[]) as Ball[]);setError("");}
@@ -51,7 +43,7 @@ export default function QuickScorer({match, sessionPlayers, teamAssignments = []
   useEffect(()=>{
     const found=balls.filter(b=>b.innings===2);
     if(found.length){setInnings(2);setInningsOneEnded(true);}
-    const used=balls.flatMap(b=>[b.bowler_name,b.striker_name||""]).filter(Boolean);
+    const used=balls.map(b=>b.bowler_name).filter(Boolean);
     setGuests(g=>{
       const additional=used.filter(n=>!sessionPlayers.some(p=>p.players?.name===n) && !g.includes(n));
       return additional.length ? [...g,...new Set(additional)] : g;
@@ -245,19 +237,6 @@ export default function QuickScorer({match, sessionPlayers, teamAssignments = []
           : `Choose from this session${teamAssignments.length ? " (unassigned players)" : ""}, or tap + Name.`}</p>
     </div>
 
-    <details className="mt-3 rounded-xl bg-slate-900 px-3 py-2">
-      <summary className="cursor-pointer text-sm font-semibold">🏏 Batters (optional): {striker} / {nonStriker}</summary>
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <label className="min-w-0 text-xs">Striker
-          <select className={`mt-1 w-full ${cls}`} value={striker} onChange={e=>setStriker(e.target.value)} disabled={!isAdmin||finished}>{playerSelectOptions(battingChoices)}</select>
-        </label>
-        <label className="min-w-0 text-xs">Non-striker
-          <select className={`mt-1 w-full ${cls}`} value={nonStriker} onChange={e=>setNonStriker(e.target.value)} disabled={!isAdmin||finished}>{playerSelectOptions(battingChoices)}</select>
-        </label>
-      </div>
-      <p className="mt-2 text-xs text-slate-400">Player 1 and 2 work automatically; names are optional. Odd runs and over end change strike.</p>
-    </details>
-
     {!finished&&<>
       <div className="mt-3 grid grid-cols-4 gap-2" aria-label="One-tap cricket scoring">
         {[0, 1, 2, 3, 4, 6].map(n =>
@@ -314,6 +293,6 @@ export default function QuickScorer({match, sessionPlayers, teamAssignments = []
       <div className="mt-3 space-y-2">{bowlingSummary.map(([name,v])=><div key={name} className="flex items-center justify-between gap-2 border-b border-slate-700 pb-2 text-sm"><span>{name}</span><span className="shrink-0 text-right">{Math.floor(v.balls/6)}.{v.balls%6} ov · {v.runs} runs · {v.wickets} W</span></div>)}{!bowlingSummary.length&&<p className="text-xs text-slate-400">No deliveries yet.</p>}</div>
       <p className="mt-3 text-xs text-slate-400">Last balls: {current.slice(-12).map(b=>`${b.wicket?"W":b.runs_bat+b.extra_runs}${b.extra_type?` ${b.extra_type==="wide"?"WD":"NB"}`:""}`).join(" · ")||"—"}</p>
     </details>
-    <p className="mt-3 text-xs text-slate-500">W assumes striker out. Run-outs, byes and leg-byes are not yet supported.</p>
+    <p className="mt-3 text-xs text-slate-500">W records a wicket. Run-outs, byes and leg-byes are not yet supported.</p>
   </section>;
 }
