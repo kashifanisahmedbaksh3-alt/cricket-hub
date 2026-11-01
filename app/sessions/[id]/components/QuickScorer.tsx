@@ -97,10 +97,14 @@ export default function QuickScorer({match, sessionPlayers, teamAssignments = []
       // Players assigned to the batting side are intentionally excluded.
     }
     const unique = (values: string[]) => Array.from(new Set(values)).sort((a,b) => a.localeCompare(b));
-    const manual = unique([...guests, ...(bowler ? [bowler] : [])].filter(n =>
-      !assigned.includes(n) && !unassigned.includes(n)
-    ));
-    return { assigned: unique(assigned), unassigned: unique(unassigned), manual };
+    // If teams have been saved, show ONLY the bowling team's players.
+    // With no saved assignments at all, fall back to the full session roster.
+    const visibleUnassigned = teamAssignments.length === 0 ? unassigned : [];
+    const rosterNames = new Set(sessionPlayers.map(p => p.players?.name?.trim()).filter(Boolean));
+    // Manual guests stay available, but never sneak roster players from the batting team
+    // or the unassigned list into the bowling dropdown.
+    const manual = unique(guests.filter(n => !rosterNames.has(n)));
+    return { assigned: unique(assigned), unassigned: unique(visibleUnassigned), manual };
   }, [sessionPlayers, teamAssignments, bowlingSide, guests, bowler]);
   const team=(side:Side)=>side==="A"?(match.team_a||"Team A"):(match.team_b||"Team B");
   const score=total(current);
@@ -194,7 +198,7 @@ export default function QuickScorer({match, sessionPlayers, teamAssignments = []
     {error&&<p role="alert" className="mt-3 rounded-xl border border-red-600 bg-red-950 p-3 text-sm text-red-100">{error}</p>}
     {finished&&<p className="mt-3 rounded-xl bg-green-950 p-3 font-bold">Match completed</p>}
     {balls.length===0&&<label className="mt-3 block text-sm font-semibold">Batting first
-      <select className={`mt-1 block w-full ${cls}`} value={firstSide} onChange={e=>setFirstSide(e.target.value as Side)} disabled={!isAdmin}>
+      <select className={`mt-1 block w-full ${cls}`} value={firstSide} onChange={e=>{setFirstSide(e.target.value as Side);setBowler("");}} disabled={!isAdmin}>
         <option value="A">{team("A")}</option><option value="B">{team("B")}</option>
       </select>
     </label>}
@@ -232,9 +236,9 @@ export default function QuickScorer({match, sessionPlayers, teamAssignments = []
       </div>}
       <p className="mt-1 text-xs text-green-300">{bowler
         ? `${bowler} stays selected until the over completes.`
-        : bowlingGroups.assigned.length
-          ? `Showing ${team(bowlingSide)} bowlers first; unassigned session players also available.`
-          : `Choose from this session${teamAssignments.length ? " (unassigned players)" : ""}, or tap + Name.`}</p>
+        : teamAssignments.length > 0
+          ? `Only assigned ${team(bowlingSide)} players are listed. If a bowler is unassigned, tap + Name.`
+          : `No teams assigned yet: showing all session players. You can also tap + Name.`}</p>
     </div>
 
     {!finished&&<>
