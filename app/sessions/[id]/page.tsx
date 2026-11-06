@@ -4,7 +4,7 @@
 
 import TeamSetup from "./components/TeamSetup";
 
-
+import SessionPaymentShare from "./components/SessionPaymentShare";
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -2202,7 +2202,7 @@ export default function SessionDetailPage() {
 
         />
 
-
+		<SessionPaymentShare sessionId={id} isAdmin={isAdmin} />
 
         <section id="matches" className="mt-8 rounded-2xl bg-slate-900 p-6">
 
