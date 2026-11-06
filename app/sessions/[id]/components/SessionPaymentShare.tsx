@@ -17,7 +17,7 @@ type SessionPaymentData = {
   booking_amount: number | null;
   final_total_amount: number | null;
   final_amount_per_player: number | null;
-  session_expenses: { id: string; amount: number | null }[];
+  session_expenses: { id: string; description: string | null; amount: number | null }[];
   session_players: SessionPlayer[];
 };
 
@@ -56,6 +56,8 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
   const [openedIds, setOpenedIds] = useState<string[]>([]);
   const [sharing, setSharing] = useState(false);
   const [qrFile, setQrFile] = useState<File | null>(null);
+  const [qrImage, setQrImage] = useState<HTMLImageElement | null>(null);
+  const [sharingPlayerId, setSharingPlayerId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!isAdmin || !sessionId) return;
@@ -66,7 +68,7 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
       .select(`
         id, session_name, session_date, session_status, booking_amount,
         final_total_amount, final_amount_per_player,
-        session_expenses (id, amount),
+        session_expenses (id, description, amount),
         session_players (id, amount_paid, players (name, mobile))
       `)
       .eq("id", sessionId)
@@ -102,6 +104,17 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
     return () => { active = false; };
   }, []);
 
+  // Load QR in advance so the personalised PNG is generated synchronously in
+  // the user's click handler. Mobile native sharing requires user activation.
+  useEffect(() => {
+    let active = true;
+    const image = new Image();
+    image.onload = () => { if (active) setQrImage(image); };
+    image.onerror = () => { if (active) setQrImage(null); };
+    image.src = QR_PATH;
+    return () => { active = false; };
+  }, []);
+
   // Recheck when returning to Cricket Hub after recording a payment in another tab.
   useEffect(() => {
     if (!isAdmin) return;
@@ -134,30 +147,147 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
 
   const qrUrl = "https://cricket-hub-olive.vercel.app/payment-qr.png";
 
+  // Include real expense descriptions recorded under Session Finance.
+  function expenseBreakdown(): string[] {
+    if (!data) return [];
+    const booking = totals.booking > 0 ? [`Turf: ${rupees(totals.booking)}`] : [];
+    const extras = (data.session_expenses ?? [])
+      .filter(item => Number(item.amount ?? 0) > 0)
+      .map(item => `${(item.description ?? "Other expense").trim() || "Other expense"}: ${rupees(Number(item.amount))}`);
+    return [...booking, ...extras];
+  }
+
   function individualMessage(row: SessionPlayer): string {
     if (!data) return "";
     const paid = Number(row.amount_paid ?? 0);
     const due = Math.max(0, Math.round((totals.share - paid) * 100) / 100);
+    const expenseLines = expenseBreakdown();
     return [
       `Hi ${row.players?.name || "Player"},`,
-      "",
-      "🏏 Ittehaad Cricket — Payment Update",
-      `Session: ${data.session_name} (${readableDate(data.session_date)})`,
-      `Your share: ${rupees(totals.share)}`,
-      `Already paid: ${rupees(paid)}`,
-      `Balance due: ${rupees(due)}`,
-      "",
-      due > 0 ? "Please make your payment using the Google Pay QR:" : "Thank you — your share is paid.",
-      qrUrl,
-      "",
-      totals.ended ? "Final session balance." : "Current share; it may change if players or expenses are updated.",
-      "Thank you!",
+      `🏏 ${data.session_name} | ${readableDate(data.session_date)}`,
+      ...expenseLines,
+      `Total: ${rupees(totals.total)} / ${totals.count} players`,
+      `${totals.ended ? "Share" : "Current share"}: ${rupees(totals.share)}`,
+      `Paid: ${rupees(paid)} | *Due: ${rupees(due)}*`,
+      due > 0 ? `Pay via Google Pay QR: ${qrUrl}` : "Payment complete — thank you!",
     ].join("\n");
   }
 
   function linkFor(row: SessionPlayer): string {
     const number = whatsappNumber(row.players?.mobile);
     return number ? `https://wa.me/${number}?text=${encodeURIComponent(individualMessage(row))}` : "";
+  }
+
+  // Create a complete payment card, not just a link. All essential amounts are
+  // written on the image because a share target may drop the accompanying text.
+  // toDataURL + atob are synchronous to preserve native-share user activation.
+  function buildPlayerPaymentImage(row: SessionPlayer): File | null {
+    if (!data || !qrImage) return null;
+
+    const paid = Number(row.amount_paid ?? 0);
+    const due = Math.max(0, Math.round((totals.share - paid) * 100) / 100);
+    const expenses = expenseBreakdown();
+    const visible = expenses.slice(0, 8);
+    if (expenses.length > 8) visible.push(`+ ${expenses.length - 8} other expenses included in total`);
+
+    const width = 1080;
+    const lineHeight = 53;
+    const listStart = 445;
+    const summaryStart = listStart + visible.length * lineHeight + 44;
+    const qrTop = summaryStart + 250;
+    const qrWidth = 560;
+    const qrHeight = qrWidth * qrImage.naturalHeight / qrImage.naturalWidth;
+    const height = Math.ceil(qrTop + qrHeight + 90);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = "#065f46";
+    ctx.fillRect(0, 0, width, 182);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 52px Arial, sans-serif";
+    ctx.fillText("ITTEHAAD CRICKET", 65, 77);
+    ctx.font = "30px Arial, sans-serif";
+    ctx.fillText(`${data.session_name}  |  ${readableDate(data.session_date)}`.slice(0, 56), 66, 137);
+
+    const playerName = (row.players?.name ?? "Player").trim();
+    ctx.fillStyle = "#0f172a";
+    ctx.font = "bold 44px Arial, sans-serif";
+    ctx.fillText(`Hi ${playerName},`.slice(0, 40), 68, 257);
+    ctx.font = "bold 64px Arial, sans-serif";
+    ctx.fillStyle = "#047857";
+    ctx.fillText(`Balance due: ${rupees(due)}`, 68, 339);
+
+    ctx.font = "bold 30px Arial, sans-serif";
+    ctx.fillStyle = "#334155";
+    ctx.fillText("EXPENSE BREAKDOWN", 68, 411);
+    ctx.font = "31px Arial, sans-serif";
+    ctx.fillStyle = "#0f172a";
+    visible.forEach((line, index) => {
+      const maxWidth = width - 135;
+      let fitted = line;
+      while (fitted.length > 12 && ctx.measureText(fitted).width > maxWidth) {
+        fitted = fitted.slice(0, -2);
+      }
+      if (fitted !== line) fitted += "…";
+      ctx.fillText(fitted, 70, listStart + index * lineHeight);
+    });
+
+    ctx.fillStyle = "#e2e8f0";
+    ctx.fillRect(68, summaryStart - 25, width - 136, 2);
+    ctx.fillStyle = "#0f172a";
+    ctx.font = "bold 33px Arial, sans-serif";
+    ctx.fillText(`Total: ${rupees(totals.total)}  /  ${totals.count} players`, 68, summaryStart + 32);
+    ctx.fillText(`Your share: ${rupees(totals.share)}`, 68, summaryStart + 86);
+    ctx.font = "31px Arial, sans-serif";
+    ctx.fillText(`Already paid: ${rupees(paid)}`, 68, summaryStart + 139);
+    ctx.fillStyle = "#047857";
+    ctx.font = "bold 33px Arial, sans-serif";
+    ctx.fillText(due > 0 ? "SCAN THE QR TO PAY" : "PAYMENT RECEIVED — THANK YOU", 68, summaryStart + 210);
+
+    ctx.drawImage(qrImage, (width - qrWidth) / 2, qrTop, qrWidth, qrHeight);
+    ctx.fillStyle = "#475569";
+    ctx.font = "25px Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Google Pay · Payment update", width / 2, height - 40);
+    ctx.textAlign = "left";
+
+    try {
+      const dataUrl = canvas.toDataURL("image/png");
+      const base64 = dataUrl.split(",")[1];
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+      const filename = `Ittehaad-Payment-${playerName.replace(/[^a-z0-9-]/gi, "-")}.png`;
+      return new File([bytes], filename, { type: "image/png" });
+    } catch {
+      return null;
+    }
+  }
+
+  function shareIndividualImage(row: SessionPlayer) {
+    if (!data || sharingPlayerId) return;
+    const image = buildPlayerPaymentImage(row);
+    if (!image || typeof navigator.share !== "function" ||
+        (typeof navigator.canShare === "function" && !navigator.canShare({ files: [image] }))) {
+      alert("Image sharing is not supported here. Use a phone browser (Safari/Chrome), or the WhatsApp text button.");
+      return;
+    }
+    // Must call share immediately from the button tap (not after an await).
+    setSharingPlayerId(row.id);
+    void navigator.share({
+      title: "Ittehaad Cricket Payment",
+      text: `Payment details for ${row.players?.name ?? "Player"}. The QR and amount due are on the image.`,
+      files: [image],
+    }).catch((err: unknown) => {
+      if (!(err instanceof Error && err.name === "AbortError")) {
+        alert("Could not share the image. Try the WhatsApp text button instead.");
+      }
+    }).finally(() => setSharingPlayerId(null));
   }
 
   const playerRows = useMemo(() => {
@@ -177,19 +307,12 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
   function groupMessage() {
     if (!data) return "";
     return [
-      "🏏 ITTEHAAD CRICKET — PAYMENT UPDATE",
-      `${data.session_name} | ${readableDate(data.session_date)}`,
-      "",
-      `Registered players: ${totals.count}`,
-      `Turf booking: ${rupees(totals.booking)}`,
-      `Additional expenses: ${rupees(totals.expenses)}`,
-      `Total expenses: ${rupees(totals.total)}`,
-      `Each player pays: ${rupees(totals.share)}`,
-      `Collected: ${rupees(totals.collected)}`,
-      `Pending balances: ${rupees(totals.pending)}`,
-      "",
+      `🏏 ${data.session_name} | ${readableDate(data.session_date)}`,
+      ...expenseBreakdown(),
+      `Total: ${rupees(totals.total)} / ${totals.count} players`,
+      `${totals.ended ? "Share" : "Current share"}: ${rupees(totals.share)}`, 
+      `Collected: ${rupees(totals.collected)} | Pending: ${rupees(totals.pending)}`,
       `Google Pay QR: ${qrUrl}`,
-      totals.ended ? "Final figures." : "Provisional figures — updated expenses or attendance may change the share.",
     ].join("\n");
   }
 
@@ -252,7 +375,8 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
 
           <div className="mt-4 rounded-xl bg-slate-950 p-3 sm:p-4">
             <h3 className="text-base font-bold">Individual WhatsApp reminders</h3>
-            <p className="mt-1 text-xs text-slate-400">WhatsApp opens a personalised message. Tap Send inside WhatsApp; opening the chat is not delivery confirmation.</p>
+            <p className="mt-1 text-xs text-slate-400">On your phone, tap Share QR + Details, choose WhatsApp and the correct player, then Send. The full expense breakdown and QR are inside the image. The Text option opens the saved mobile number directly.</p>
+            <p className="mt-2 text-xs text-amber-200">Note: QR image sharing cannot automatically target a saved number. Select the correct person in WhatsApp. The other person can scan the QR or use Google Pay's image scanner where supported.</p>
             <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm">
               <input type="checkbox" className="h-4 w-4" checked={includePaid}
                 onChange={e => { setIncludePaid(e.target.checked); setOpenedIds([]); }} />
@@ -266,7 +390,7 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
               <a href={linkFor(firstUnopened)} target="_blank" rel="noopener noreferrer"
                 onClick={() => setOpenedIds(previous => previous.includes(firstUnopened.id) ? previous : [...previous, firstUnopened.id])}
                 className="mt-3 flex min-h-16 items-center justify-between rounded-xl bg-emerald-500 px-4 py-3 font-bold text-slate-950">
-                <span>Next: {firstUnopened.players?.name}<span className="block text-xs font-normal">Open personalised WhatsApp</span></span>
+                <span>Next: {firstUnopened.players?.name}<span className="block text-xs font-normal">Direct chat (text only)</span></span>
                 <span aria-hidden="true">↗</span>
               </a>
             )}
@@ -284,10 +408,19 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
                       {openedIds.includes(row.id) && <p className="text-xs text-amber-300">Chat opened (not confirmed sent)</p>}
                       {!link && <p className="text-xs text-amber-300">Add this player's mobile number in Players</p>}
                     </div>
-                    {link && (due > 0 || includePaid) ? (
-                      <a href={link} target="_blank" rel="noopener noreferrer"
-                        onClick={() => setOpenedIds(previous => previous.includes(row.id) ? previous : [...previous, row.id])}
-                        className="shrink-0 rounded-xl bg-emerald-500 px-3 py-3 text-xs font-bold text-slate-950">WhatsApp</a>
+                    {(due > 0 || includePaid) && link ? (
+                      <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                        <button type="button" disabled={!qrImage || sharingPlayerId !== null}
+                          onClick={() => shareIndividualImage(row)}
+                          className="rounded-xl bg-emerald-500 px-3 py-3 text-xs font-bold text-slate-950 disabled:opacity-50">
+                          {sharingPlayerId === row.id ? "Sharing…" : "Share QR + Details"}
+                        </button>
+                        <a href={link} target="_blank" rel="noopener noreferrer"
+                          onClick={() => setOpenedIds(previous => previous.includes(row.id) ? previous : [...previous, row.id])}
+                          className="rounded-xl border border-slate-500 px-3 py-3 text-center text-xs font-bold text-white">
+                          Text
+                        </a>
+                      </div>
                     ) : due <= 0 && link ? (
                       <span className="shrink-0 rounded-lg bg-emerald-500/20 px-3 py-2 text-xs text-emerald-200">Paid</span>
                     ) : null}
