@@ -58,6 +58,9 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
   const [qrFile, setQrFile] = useState<File | null>(null);
   const [qrImage, setQrImage] = useState<HTMLImageElement | null>(null);
   const [sharingPlayerId, setSharingPlayerId] = useState<string | null>(null);
+  const [personalLinks, setPersonalLinks] = useState<Record<string, string>>({});
+  const [linksLoading, setLinksLoading] = useState(false);
+  const [linksError, setLinksError] = useState("");
 
   const refresh = useCallback(async () => {
     if (!isAdmin || !sessionId) return;
@@ -87,6 +90,44 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
   }, [refresh, refreshKey]);
 
   useEffect(() => { setOpenedIds([]); }, [sessionId]);
+
+  // Prepare encrypted, time-limited payment links on the server. They contain a
+  // snapshot of each player's own amount, without exposing session/player IDs
+  // or trusting an editable amount supplied in the public URL.
+  useEffect(() => {
+    const controller = new AbortController();
+    setPersonalLinks({});
+    setLinksError("");
+    if (!isAdmin || !data) return () => controller.abort();
+    setLinksLoading(true);
+    void (async () => {
+      try {
+        const { data: auth } = await supabase.auth.getSession();
+        const accessToken = auth.session?.access_token;
+        if (!accessToken) throw new Error("Please log in as admin to prepare payment links.");
+        const response = await fetch("/api/payment-links", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ sessionId: data.id }),
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result?.error || "Cannot prepare payment links.");
+        if (!controller.signal.aborted) setPersonalLinks(result.links || {});
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setLinksError(err instanceof Error ? err.message : "Payment link unavailable.");
+        }
+      } finally {
+        if (!controller.signal.aborted) setLinksLoading(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [data, isAdmin]);
 
   // Prepare the original QR before Share is pressed. iOS requires native share
   // to be called directly from the tap, rather than after awaiting fetch().
@@ -169,7 +210,11 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
       `Total: ${rupees(totals.total)} / ${totals.count} players`,
       `${totals.ended ? "Share" : "Current share"}: ${rupees(totals.share)}`,
       `Paid: ${rupees(paid)} | *Due: ${rupees(due)}*`,
-      due > 0 ? `Pay via Google Pay QR: ${qrUrl}` : "Payment complete — thank you!",
+      due > 0
+        ? personalLinks[row.id]
+          ? `Pay here (Google Pay QR or UPI): ${personalLinks[row.id]}`
+          : `Google Pay QR: ${qrUrl}`
+        : "Payment complete — thank you!",
     ].join("\n");
   }
 
@@ -375,8 +420,8 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
 
           <div className="mt-4 rounded-xl bg-slate-950 p-3 sm:p-4">
             <h3 className="text-base font-bold">Individual WhatsApp reminders</h3>
-            <p className="mt-1 text-xs text-slate-400">On your phone, tap Share QR + Details, choose WhatsApp and the correct player, then Send. The full expense breakdown and QR are inside the image. The Text option opens the saved mobile number directly.</p>
-            <p className="mt-2 text-xs text-amber-200">Note: QR image sharing cannot automatically target a saved number. Select the correct person in WhatsApp. The other person can scan the QR or use Google Pay's image scanner where supported.</p>
+            <p className="mt-1 text-xs text-slate-400">Tap WhatsApp beside a player to open their saved number with a personal payment link. That page shows the QR and a Pay via UPI button. Alternatively, Share QR + Details sends an image through your phone's share menu.</p>
+            <p className="mt-2 text-xs text-amber-200">WhatsApp messages still require you to press Send. Image sharing requires choosing a recipient. Personal payment links are valid for 30 days and reflect the amounts when prepared.</p>
             <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm">
               <input type="checkbox" className="h-4 w-4" checked={includePaid}
                 onChange={e => { setIncludePaid(e.target.checked); setOpenedIds([]); }} />
@@ -384,13 +429,16 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
             </label>
             <p className="mt-3 text-xs text-slate-300">
               {eligible.length} eligible · {missingMobiles} missing/invalid mobile · {openedIds.filter(id => eligible.some(p => p.id === id)).length} chats opened
+              {linksLoading ? " · Preparing secure payment pages…" : ""}
             </p>
+
+            {linksError && <p className="mt-2 rounded-lg border border-amber-700 p-2 text-xs text-amber-200">Personal payment page unavailable: {linksError}. Existing QR text links still work.</p>}
 
             {firstUnopened && (
               <a href={linkFor(firstUnopened)} target="_blank" rel="noopener noreferrer"
                 onClick={() => setOpenedIds(previous => previous.includes(firstUnopened.id) ? previous : [...previous, firstUnopened.id])}
                 className="mt-3 flex min-h-16 items-center justify-between rounded-xl bg-emerald-500 px-4 py-3 font-bold text-slate-950">
-                <span>Next: {firstUnopened.players?.name}<span className="block text-xs font-normal">Direct chat (text only)</span></span>
+                <span>Next: {firstUnopened.players?.name}<span className="block text-xs font-normal">Direct chat + personal payment link</span></span>
                 <span aria-hidden="true">↗</span>
               </a>
             )}
@@ -418,7 +466,7 @@ export default function SessionPaymentShare({ sessionId, isAdmin, refreshKey }: 
                         <a href={link} target="_blank" rel="noopener noreferrer"
                           onClick={() => setOpenedIds(previous => previous.includes(row.id) ? previous : [...previous, row.id])}
                           className="rounded-xl border border-slate-500 px-3 py-3 text-center text-xs font-bold text-white">
-                          Text
+                          WhatsApp
                         </a>
                       </div>
                     ) : due <= 0 && link ? (
